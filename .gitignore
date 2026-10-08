@@ -226,3 +226,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ===== Ngoại lệ: thư mục config của project trùng tên mẫu virtualenv (env/, ENV/) =====
+!configs/env/
