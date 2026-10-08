@@ -1,0 +1,17 @@
+# Stage 1 — baseline chỉ dùng ảnh: 4 backbone bản base x 3 nhánh ảnh, loss mặc định (CE sqrt-inv), fold 0.
+#   python scripts/run_grid.py experiments/stage1_baselines.yaml --env configs/env/kaggle_t4.yaml
+name: stage1_baselines
+backbones:                  # khoá -> tên run: <backbone>__<tag>__<views>; giá trị: file config hoặc {config, set}
+  resnet152:                # 320px: giảm batch để vừa 16GB, batch hiệu dụng vẫn 32
+    config: configs/baselines/cnn_resnet152.yaml
+    set: [train.batch_size=8, train.accum_steps=4]
+  convnext_base: configs/baselines/cnn_convnext_base.yaml
+  vit_base: configs/baselines/vit_base.yaml
+  swin_base: configs/baselines/swin_base.yaml
+overlays:
+  - configs/imbalance/ce_sqrt_inv.yaml
+views:                      # thứ tự chạy: từng loại ảnh riêng, rồi gộp
+  - [clin]
+  - [derm]
+  - [clin, derm]
+set: []                     # override chung cho mọi run, vd ["train.epochs=15"]

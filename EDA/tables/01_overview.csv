@@ -1,0 +1,8 @@
+file,rows,cols,unique lesion_id
+train_combined,5240,34,5240
+test_combined,479,23,479
+GroundTruth,5240,12,5240
+Train Metadata,10480,17,5240
+Test Metadata,958,17,479
+train_fold0,4716,34,4716
+val_fold0,524,34,524

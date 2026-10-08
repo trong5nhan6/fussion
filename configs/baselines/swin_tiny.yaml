@@ -1,0 +1,5 @@
+base: ../default.yaml
+name: swin_tiny
+data: {img_size: 224}
+model: {backbone: swin_tiny_patch4_window7_224.ms_in22k_ft_in1k}
+train: {batch_size: 8, accum_steps: 4, lr: 1.0e-4, backbone_lr_mult: 0.2, weight_decay: 5.0e-2}

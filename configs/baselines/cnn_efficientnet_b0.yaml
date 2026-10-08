@@ -1,0 +1,3 @@
+base: ../default.yaml
+name: cnn_efficientnet_b0
+model: {backbone: efficientnet_b0}

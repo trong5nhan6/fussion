@@ -1,0 +1,4 @@
+# Oversampling căn bậc hai, loss không trọng số
+tag: samp_q05
+loss: {name: ce, class_weight: none}
+train: {sampler_q: 0.5}

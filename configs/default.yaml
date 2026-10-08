@@ -1,0 +1,68 @@
+# Cấu hình gốc. Các file khác kế thừa bằng `base: ...` và chỉ ghi phần khác biệt.
+# Ghi đè từ CLI: --set train.epochs=5 model.backbone=resnet18
+seed: 42
+debug: false             # true -> mỗi epoch chỉ chạy vài batch để kiểm tra pipeline
+output_dir: outputs
+keep_checkpoints: true   # false: xoá fold*/best*.pt sau khi đã sinh file nộp (tiết kiệm dung lượng)
+
+data:
+  root: datasets/MILK10k
+  train_csv: train/train_combined.csv
+  test_csv: test/test_combined.csv
+  train_img_dir: train/MILK10k_Training_Input
+  test_img_dir: test/MILK10k_Test_Input
+  folds_csv: splits/folds_5.csv   # nằm trong repo (scripts/make_folds.py), để mọi máy dùng cùng cách chia
+  img_size: 320          # ảnh gốc 600x450 (4:3) -> resize giữ tỉ lệ rồi pad thành vuông
+  num_workers: 4
+
+model:
+  name: image            # xem src/milk10k/models/__init__.py
+  backbone: efficientnet_b0
+  pretrained: true
+  # Nhánh ảnh dùng để train (ablation): [clin] | [derm] | [clin, derm]
+  # Đổi nhanh từ CLI: --set model.views=[derm]
+  views: [clin, derm]
+  dropout: 0.3
+  grad_checkpointing: false  # true: giảm VRAM (~40-60%), train chậm hơn ~20-30%
+
+# Xử lý mất cân bằng — xem src/milk10k/losses.py và configs/imbalance/
+loss:
+  name: ce               # ce | focal | logit_adjusted
+  class_weight: sqrt_inv # none | inv | sqrt_inv | effective_num
+  cb_beta: 0.999         # cho effective_num; tiến về 1 thì gần với inv
+  la_tau: 1.0            # cho logit_adjusted
+  focal_gamma: 2.0
+  label_smoothing: 0.0
+
+train:
+  epochs: 20
+  batch_size: 16
+  accum_steps: 2         # batch hiệu dụng = batch_size * accum_steps
+  lr: 3.0e-4             # lr của head
+  backbone_lr_mult: 0.1  # lr backbone = lr * mult
+  weight_decay: 1.0e-2
+  warmup_epochs: 1
+  amp: true              # chỉ có tác dụng khi có CUDA
+  sampler_q: null        # null: shuffle thường | q in [0,1]: P(lớp c) ~ n_c^(1-q); 1 = cân bằng hoàn toàn
+  monitor: dice          # metric chọn checkpoint: dice (xếp hạng leaderboard) | auc | ap | balanced_acc
+  patience: 5
+  # Giai đoạn thử nghiệm: chỉ fold 0 (val = 1.048 lesion). Khi đã chọn được method,
+  # chạy đủ 5 fold: --set train.folds=[0,1,2,3,4]
+  folds: [0]
+
+crt:                     # Classifier re-training sau giai đoạn 1 (Kang et al., 2020)
+  enabled: false
+  epochs: 10
+  lr: 1.0e-3
+  sampler_q: 1.0         # lấy mẫu cân bằng cho head
+  reinit_head: true
+  patience: 10
+
+predict:
+  tta: true              # trung bình thêm ảnh lật ngang + lật dọc
+  # Cuộc thi nhị phân hoá MỖI lớp theo ngưỡng > 0.5 (không lấy argmax):
+  #   top1    : lớp argmax -> 0.5+0.5p, lớp khác -> 0.5p  => mỗi lesion đúng 1 lớp dương
+  #   softmax : giữ xác suất thô (lesion có max < 0.5 sẽ không có lớp dương nào)
+  # Metric val được tính trên điểm SAU hậu xử lý -> khớp cách chấm leaderboard.
+  postprocess: top1
+  after_train: true      # train xong tự sinh submission.csv cho tập test

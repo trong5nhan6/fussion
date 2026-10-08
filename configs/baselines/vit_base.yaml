@@ -1,0 +1,6 @@
+# ViT-Base/16 (86M tham số).
+base: ../default.yaml
+name: vit_base
+data: {img_size: 224}
+model: {backbone: vit_base_patch16_224.augreg2_in21k_ft_in1k, grad_checkpointing: true, dropout: 0.4}
+train: {batch_size: 4, accum_steps: 8, lr: 5.0e-5, backbone_lr_mult: 0.2, weight_decay: 5.0e-2}

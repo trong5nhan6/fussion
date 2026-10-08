@@ -1,0 +1,26 @@
+# Stage 2 — xử lý mất cân bằng: backbone tốt nhất của stage 1 x 9 overlay x 3 nhánh ảnh, fold 0.
+# Chọn backbone khi chạy: --backbones convnext_base   (hoặc nhiều: --backbones convnext_base,swin_base)
+# ce_sqrt_inv trùng tên run với stage 1 -> được bỏ qua nếu đã khôi phục output stage 1 (--restore).
+name: stage2_imbalance
+backbones:
+  resnet152:                # 320px: giảm batch để vừa 16GB, batch hiệu dụng vẫn 32
+    config: configs/baselines/cnn_resnet152.yaml
+    set: [train.batch_size=8, train.accum_steps=4]
+  convnext_base: configs/baselines/cnn_convnext_base.yaml
+  vit_base: configs/baselines/vit_base.yaml
+  swin_base: configs/baselines/swin_base.yaml
+overlays:
+  - configs/imbalance/ce_plain.yaml
+  - configs/imbalance/ce_sqrt_inv.yaml
+  - configs/imbalance/ce_inv.yaml
+  - configs/imbalance/cb_effective_num.yaml
+  - configs/imbalance/cb_focal.yaml
+  - configs/imbalance/logit_adjusted.yaml
+  - configs/imbalance/sampler_q05.yaml
+  - configs/imbalance/sampler_q1.yaml
+  - configs/imbalance/crt.yaml
+views:
+  - [clin]
+  - [derm]
+  - [clin, derm]
+set: []

@@ -1,0 +1,5 @@
+# Decoupling: giai đoạn 1 học biểu diễn với dữ liệu tự nhiên, giai đoạn 2 train lại head với sampler cân bằng
+tag: crt
+loss: {name: ce, class_weight: none}
+train: {sampler_q: null}
+crt: {enabled: true, epochs: 10, lr: 1.0e-3, sampler_q: 1.0, reinit_head: true}

@@ -1,0 +1,3 @@
+# Class-Balanced Focal (cấu hình gốc của bài báo Cui et al.)
+tag: cb_focal
+loss: {name: focal, class_weight: effective_num, cb_beta: 0.999, focal_gamma: 2.0}

@@ -1,0 +1,4 @@
+base: ../default.yaml
+name: cnn_convnext_tiny
+model: {backbone: convnext_tiny.fb_in22k_ft_in1k}
+train: {batch_size: 8, accum_steps: 4, lr: 2.0e-4}

@@ -1,0 +1,13 @@
+,pass
+Ground truth one-hot (mỗi lesion đúng 1 nhãn),True
+Nhãn chỉ gồm 0/1,True
+train_combined khớp GroundTruth,True
+Train ∩ Test lesion_id rỗng,True
+fold0 train ∩ val rỗng,True
+fold0 train ∪ val = toàn bộ train,True
+Metadata train: mỗi lesion có 2 ảnh,True
+Metadata test: mỗi lesion có 2 ảnh,True
+Không trùng isic_id giữa train và test,True
+Không có lesion trùng lặp trong train_combined,True
+Ảnh train tồn tại đầy đủ (thiếu 0),True
+Ảnh test tồn tại đầy đủ (thiếu 0),True

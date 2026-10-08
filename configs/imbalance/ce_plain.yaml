@@ -1,0 +1,3 @@
+# Đối chứng: CE thường, không bù mất cân bằng
+tag: ce_plain
+loss: {name: ce, class_weight: none}

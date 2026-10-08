@@ -1,0 +1,6 @@
+# ConvNeXt-Base (89M tham số). 224px + gradient checkpointing để vừa GPU 4GB.
+base: ../default.yaml
+name: cnn_convnext_base
+data: {img_size: 224}
+model: {backbone: convnext_base.fb_in22k_ft_in1k, grad_checkpointing: true, dropout: 0.4}
+train: {batch_size: 4, accum_steps: 8, lr: 1.0e-4, weight_decay: 5.0e-2}

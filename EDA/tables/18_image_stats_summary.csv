@@ -1,0 +1,5 @@
+split,modality,file_kb_mean,file_kb_min,file_kb_max,brightness_mean,brightness_min,brightness_max,contrast_mean,contrast_min,contrast_max
+test,clinical,39.4,13.7,82.4,135.1,63.1,208.2,20.1,5.4,66.7
+test,dermoscopic,27.7,14.7,62.9,146.2,83.2,215.4,23.4,4.7,84.6
+train,clinical,39.1,11.5,99.1,137.0,36.6,218.7,19.2,4.9,81.6
+train,dermoscopic,27.0,12.2,74.1,148.8,52.7,235.6,23.3,4.6,85.0

@@ -1,0 +1,5 @@
+# ResNet-152 (60M tham số), 320px như các CNN khác.
+base: ../default.yaml
+name: cnn_resnet152
+model: {backbone: resnet152.a1h_in1k, grad_checkpointing: true}
+train: {batch_size: 8, accum_steps: 4}

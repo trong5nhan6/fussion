@@ -1,0 +1,3 @@
+# Mặc định hiện tại: CE trọng số sqrt(1/tần suất)
+tag: ce_sqrtinv
+loss: {name: ce, class_weight: sqrt_inv}

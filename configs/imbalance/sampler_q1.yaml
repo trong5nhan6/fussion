@@ -1,0 +1,4 @@
+# Lấy mẫu cân bằng hoàn toàn (lớp 7 mẫu bị lặp rất nhiều -> dễ overfit)
+tag: samp_q1
+loss: {name: ce, class_weight: none}
+train: {sampler_q: 1.0}

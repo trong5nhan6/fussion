@@ -1,0 +1,2 @@
+tag: ce_inv
+loss: {name: ce, class_weight: inv}

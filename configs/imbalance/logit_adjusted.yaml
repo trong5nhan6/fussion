@@ -1,0 +1,3 @@
+# Logit-adjusted loss (Menon et al., 2021), tau=1. Không kết hợp reweight.
+tag: la_t1
+loss: {name: logit_adjusted, class_weight: none, la_tau: 1.0}

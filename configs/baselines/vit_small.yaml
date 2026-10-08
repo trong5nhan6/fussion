@@ -1,0 +1,5 @@
+base: ../default.yaml
+name: vit_small
+data: {img_size: 224}
+model: {backbone: vit_small_patch16_224.augreg_in21k_ft_in1k}
+train: {lr: 1.0e-4, backbone_lr_mult: 0.2, weight_decay: 5.0e-2}
