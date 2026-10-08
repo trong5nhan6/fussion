@@ -41,8 +41,11 @@ def collect(dirs) -> pd.DataFrame:
             if m.get("model", {}).get("inputs") == "metadata":
                 row.update(kind="ml", backbone=m["model"]["name"], tag="", views="metadata")
             else:
-                parts = run.split("__")
-                row.update(kind="image", backbone=parts[0] if len(parts) == 3 else m["model"].get("backbone"),
+                parts = run.split("__")  # <backbone>__<tag>__<views>[__<hậu tố>]
+                backbone = parts[0] if len(parts) >= 3 else m["model"].get("backbone")
+                if len(parts) >= 4:
+                    backbone += f" [{parts[3]}]"  # run với tham số khác -> dòng riêng trong bảng
+                row.update(kind="image", backbone=backbone,
                            tag=m.get("tag", ""), views="+".join(m["model"].get("views", [])))
             rows[run] = row  # cùng tên run ở nhiều thư mục -> lấy bản đọc sau
     return pd.DataFrame(rows.values())

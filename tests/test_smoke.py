@@ -221,3 +221,12 @@ def test_restore_and_done(tmp_path):
     assert run_grid.restore([prev], out) == 1
     assert run_grid.is_done(out / "a__t__clin") and not (out / "a__t__clin" / "fold0" / "best.pt").exists()
     assert not (out / "b__t__clin").exists()
+
+
+def test_grid_suffix_and_cli_override_priority():
+    jobs = run_grid.build_jobs(_exp("stage1_baselines.yaml"), "configs/env/kaggle_t4.yaml", ["resnet152"],
+                               ["train.batch_size=4", "train.epochs=30"], suffix="ep30")
+    assert jobs[0].name == "resnet152__ce_sqrtinv__clin__ep30"
+    cfg = load_config([ROOT / c for c in jobs[0].configs], jobs[0].sets)
+    assert cfg["train"]["batch_size"] == 4 and cfg["train"]["epochs"] == 30  # override notebook > riêng backbone
+    assert "data.img_size" in run_grid.effective_table(jobs)

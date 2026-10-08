@@ -24,7 +24,14 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 import yaml
 
+from milk10k.config import load_config
 from milk10k.utils import PROJECT_ROOT, load_json, resolve_path
+
+# Tham số in ra khi --dry-run để kiểm tra cấu hình thực tế (sau khi gộp config + overlay + env + --set)
+SHOW_KEYS = ["data.img_size", "train.batch_size", "train.accum_steps", "train.epochs", "train.patience", "train.lr",
+             "train.backbone_lr_mult", "train.weight_decay", "train.folds", "model.grad_checkpointing",
+             "model.dropout", "loss.name", "loss.class_weight", "train.sampler_q", "crt.enabled",
+             "predict.tta", "predict.postprocess"]
 
 
 @dataclass
@@ -39,7 +46,7 @@ class Job:
     extra: dict = field(default_factory=dict)
 
 
-def build_jobs(exp: dict, env: str | None, only_backbones=None, extra_set=()) -> list[Job]:
+def build_jobs(exp: dict, env: str | None, only_backbones=None, extra_set=(), suffix: str = "") -> list[Job]:
     unknown = set(only_backbones or []) - set(exp["backbones"])
     if unknown:
         raise SystemExit(f"Backbone không có trong {exp['name']}: {sorted(unknown)}. Có: {list(exp['backbones'])}")
@@ -55,8 +62,30 @@ def build_jobs(exp: dict, env: str | None, only_backbones=None, extra_set=()) ->
                 # thứ tự ưu tiên tăng dần: chung của lưới < riêng backbone < view < CLI
                 sets = [*(exp.get("set") or []), *(entry.get("set") or []),
                         f"model.views=[{','.join(views)}]", *extra_set]
-                jobs.append(Job(f"{key}__{tag}__{'+'.join(views)}", configs, sets))
+                name = f"{key}__{tag}__{'+'.join(views)}" + (f"__{suffix}" if suffix else "")
+                jobs.append(Job(name, configs, sets))
     return jobs
+
+
+def effective_table(jobs: list[Job]) -> str:
+    """Bảng cấu hình thực tế: mỗi backbone một cột (lấy run đầu tiên của backbone đó)."""
+    import pandas as pd
+
+    cols = {}
+    for j in jobs:
+        key = j.name.split("__")[0]
+        if key in cols:
+            continue
+        cfg = load_config([resolve_path(c) for c in j.configs], j.sets)
+        row = {}
+        for k in SHOW_KEYS:
+            node = cfg
+            for part in k.split("."):
+                node = node.get(part) if isinstance(node, dict) else None
+            row[k] = node
+        row["model.backbone"] = cfg["model"]["backbone"]
+        cols[key] = row
+    return pd.DataFrame(cols).to_string()
 
 
 def is_done(run_dir: Path) -> bool:
@@ -186,13 +215,14 @@ def main():
     ap.add_argument("--est-run-h", type=float, default=1.5, help="Ước lượng thời gian 1 run khi chưa có số liệu")
     ap.add_argument("--poll-s", type=int, default=60)
     ap.add_argument("--set", nargs="*", default=[], help="Override thêm cho mọi run")
+    ap.add_argument("--suffix", default="", help="Hậu tố tên run, vd ep30 -> resnet152__ce_sqrtinv__clin__ep30")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     start = time.time()
 
     exp = yaml.safe_load(resolve_path(args.experiment).read_text(encoding="utf-8"))
     only = [b.strip() for b in args.backbones.split(",")] if args.backbones else None
-    jobs = build_jobs(exp, args.env, only, args.set)
+    jobs = build_jobs(exp, args.env, only, args.set, args.suffix)
     out_dir = resolve_path("outputs")
     out_dir.mkdir(exist_ok=True)
     if args.restore:
@@ -207,6 +237,12 @@ def main():
           f"| GPU {gpus} | ngân sách {args.time_budget_h} giờ")
     for j in jobs:
         print(f"  [{'x' if j.status == 'done_before' else ' '}] {j.name}")
+    if args.set:
+        print("Override chung: " + " ".join(args.set))
+    if args.dry_run:
+        print()
+        print("Cấu hình thực tế theo backbone (loss/sampler/cRT thay đổi theo overlay ở stage 2):")
+        print(effective_table(jobs))
     if args.dry_run or not pending:
         return
 

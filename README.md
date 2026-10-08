@@ -24,6 +24,12 @@ Notebook tự clone repo, tải dữ liệu từ Google Drive và train trên **
 3. Trên Kaggle: Import notebook → Settings: **Accelerator GPU T4 x2**, **Internet On** → sửa `REPO_URL`, `DRIVE_URL`
    trong ô *Cấu hình* → **Save Version → Save & Run All (Commit)**.
 
+**Chỉnh tham số:** mỗi notebook có ô **THAM SỐ TRAIN** (`PARAMS`) gom các tham số quan trọng của
+`configs/default.yaml`: epochs, patience, lr, batch, img_size, folds, TTA, hậu xử lý; notebook 02 có thêm τ, β, γ
+và tham số cRT. `None` = giữ giá trị trong config (vài tham số khác nhau theo backbone). Giá trị đặt ở đây có ưu
+tiên cao nhất và áp dụng cho mọi run. Ô *Danh sách run* in bảng **cấu hình thực tế** từng backbone để kiểm tra trước
+khi train. Khi đổi tham số so với lần chạy trước, đặt `RUN_SUFFIX` (vd `"ep30"`) để run mới không bị bỏ qua do trùng tên.
+
 **Chạy tiếp khi hết 12 giờ:** Add Input → output của version trước → điền thư mục `outputs` của nó vào `RESTORE`
 → Save Version. `run_grid.py` bỏ qua run đã xong, chạy lại run dở dang, và không nhận run mới nếu không kịp
 xong trước `TIME_BUDGET_H`. Checkpoint bị xoá sau khi sinh file nộp (giới hạn output 20GB của Kaggle).
