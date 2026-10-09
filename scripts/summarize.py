@@ -173,9 +173,11 @@ def main():
                     for a in ARCH_NAMES:
                         x = g[(g.arch == a) & (g.tag == tag) & (g.views == v)]
                         row[a] = x["Dice Coefficient"].iloc[0] if not x.empty else float("nan")
+                    if all(pd.isna(row[a]) for a in ARCH_NAMES):
+                        continue  # không có run MoE nào cho (loss, nhánh ảnh) này
                     cmp[f"{TAG_NAMES.get(tag, tag)} — {v}"] = row
             if cmp:
-                c = pd.DataFrame(cmp).T
+                c = pd.DataFrame(cmp).T.dropna(axis=1, how="all")
                 c.to_csv(out / f"stage3_vs_image_{bb}.csv")
                 md += [f"### MoE so với chỉ ảnh ({bb}, cùng loss)", "", c.to_markdown(floatfmt=".4f"), ""]
         md += explain_section(g)
