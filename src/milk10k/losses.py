@@ -8,6 +8,8 @@ class_weight:
 loss:
   ce | focal | logit_adjusted (Menon et al., 2021): CE(logits + tau * log prior, y). Chỉ cộng bias khi train;
   lúc suy luận dùng logit gốc -> mô hình tự "bù" prior, tối ưu trực tiếp balanced error.
+  bce: mỗi lớp là một bài toán nhị phân độc lập (sigmoid) — khớp cách chấm của ISIC (ngưỡng 0.5 từng lớp).
+       pos_weight_c = n_âm / n_dương, chặn ở loss.pos_weight_clip (lớp hiếm được nhân tối đa x clip).
 """
 import numpy as np
 import torch
@@ -67,6 +69,26 @@ class LogitAdjustedLoss(nn.Module):
                                label_smoothing=self.label_smoothing)
 
 
+class PosWeightedBCE(nn.Module):
+    """BCEWithLogits trên nhãn one-hot, pos_weight theo lớp; nhận nhãn dạng chỉ số lớp như các loss khác."""
+
+    def __init__(self, pos_weight: torch.Tensor | None):
+        super().__init__()
+        self.register_buffer("pos_weight", pos_weight)
+
+    def forward(self, logits, target):
+        onehot = F.one_hot(target, logits.shape[1]).float()
+        return F.binary_cross_entropy_with_logits(logits.float(), onehot, pos_weight=self.pos_weight)
+
+
+def bce_pos_weight(labels, clip: float | None) -> torch.Tensor:
+    counts = np.maximum(class_counts(labels), 1)
+    w = (counts.sum() - counts) / counts
+    if clip:
+        w = np.minimum(w, clip)
+    return torch.tensor(w, dtype=torch.float32)
+
+
 def build_loss(cfg: dict, train_labels) -> nn.Module:
     lc = cfg["loss"]
     weight = class_weights(train_labels, lc.get("class_weight"), lc.get("cb_beta", 0.999))
@@ -79,4 +101,7 @@ def build_loss(cfg: dict, train_labels) -> nn.Module:
         counts = np.maximum(class_counts(train_labels), 1)
         prior = torch.tensor(counts / counts.sum(), dtype=torch.float32)
         return LogitAdjustedLoss(prior, lc.get("la_tau", 1.0), weight, ls)
+    if lc["name"] == "bce":
+        clip = lc.get("pos_weight_clip", 10.0)
+        return PosWeightedBCE(None if clip == 0 else bce_pos_weight(train_labels, clip))
     raise KeyError(f"Loss không hỗ trợ: {lc['name']}")

@@ -16,7 +16,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", required=True)
     ap.add_argument("--no-tta", action="store_true")
-    ap.add_argument("--postprocess", choices=["top1", "softmax"], default=None)
+    ap.add_argument("--postprocess", choices=["auto", "top1", "softmax", "sigmoid"], default=None)
     args = ap.parse_args()
 
     run_dir = resolve_path(args.run)

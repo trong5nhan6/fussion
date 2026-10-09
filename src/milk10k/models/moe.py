@@ -32,11 +32,12 @@ def mlp(d_in, d_out, dropout=0.1):
 class TokenEncoder(nn.Module):
     """Ảnh (backbone timm dùng chung cho các view) + 2 MLP metadata -> tokens [B, M, d]."""
 
-    def __init__(self, backbone, views, pretrained, img_size, d, grad_checkpointing, modality_dropout, dropout):
+    def __init__(self, backbone, views, pretrained, img_size, d, grad_checkpointing, modality_dropout, dropout,
+                 drop_path_rate=0.0):
         super().__init__()
         self.views = check_views(views)
         self.modalities = self.views + ["demo", "monet"]
-        self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing)
+        self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing, drop_path_rate)
         self.img_proj = nn.Sequential(nn.Linear(self.encoder.num_features, d), nn.LayerNorm(d))
         self.demo = nn.Sequential(mlp(DEMO_DIM, d, dropout), nn.LayerNorm(d))
         self.monet = nn.Sequential(mlp(MONET_DIM, d, dropout), nn.LayerNorm(d))
@@ -170,14 +171,14 @@ class MultimodalMoE(nn.Module):
     def __init__(self, arch, backbone, views, pretrained=True, img_size=224, grad_checkpointing=False,
                  d_model=256, n_experts=4, top_k=2, n_blocks=2, n_heads=4, balance_alpha=0.01, aux_weight=0.25,
                  modality_dropout=0.15, lt_taus=(0.0, 0.5, 1.0), dropout=0.1, head_dropout=0.3,
-                 fusion_lr_mult=1.0, num_classes=NUM_CLASSES):
+                 fusion_lr_mult=1.0, drop_path_rate=0.0, num_classes=NUM_CLASSES):
         super().__init__()
         if arch not in ARCHS:
             raise ValueError(f"model.arch phải là một trong {list(ARCHS)}, nhận {arch!r}")
         self.arch = arch
         fusion, self.longtail = ARCHS[arch]
         self.tokens = TokenEncoder(backbone, views, pretrained, img_size, d_model, grad_checkpointing,
-                                   modality_dropout, dropout)
+                                   modality_dropout, dropout, drop_path_rate)
         M = len(self.tokens.modalities)
         self.fusion = {"gated": lambda: GatedFusion(M, d_model, dropout),
                        "concat": lambda: ConcatFusion(M, d_model, dropout),

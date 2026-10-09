@@ -200,7 +200,7 @@ def test_stage1_grid_order_and_names():
 
 def test_stage2_grid_filter_and_effective_config():
     jobs = run_grid.build_jobs(_exp("stage2_imbalance.yaml"), "configs/env/kaggle_t4.yaml", ["resnet152"])
-    assert len(jobs) == 27 and len({j.name for j in jobs}) == 27
+    assert len(jobs) == 30 and len({j.name for j in jobs}) == 30   # 10 overlay (9 + bce) x 3 nhánh ảnh
     j = next(j for j in jobs if j.name == "resnet152__crt__derm")
     cfg = load_config([ROOT / c for c in j.configs], j.sets)
     assert cfg["crt"]["enabled"] and cfg["model"]["views"] == ["derm"]
@@ -319,3 +319,77 @@ def test_moe_E_is_concat_with_longtail():
     jobs = run_grid.build_jobs(_exp("stage3_moe.yaml"), None, ["vit_base"], only_archs=["E"],
                                only_overlays=["ce_sqrt_inv", "sampler_q05"], only_views=["derm"])
     assert sorted(j.name for j in jobs) == ["vit_base__E__lt__derm", "vit_base__E__samp_q05__derm"]
+
+
+# ---------------------------------------------------------------- BCE / sigmoid / resize / aug / drop path (stage 4)
+from PIL import Image as _Image  # noqa: E402
+
+from milk10k.data.transforms import build_transforms as _bt  # noqa: E402
+from milk10k.engine import nll  # noqa: E402
+from milk10k.losses import PosWeightedBCE, bce_pos_weight  # noqa: E402
+from milk10k.metrics import output_activation, resolve_postprocess  # noqa: E402
+
+
+def test_bce_pos_weight_and_loss():
+    w = bce_pos_weight(LABELS, 10.0)
+    assert w[0] < 1.0 + 1e-6 or w[0] == pytest.approx((len(LABELS) - 900) / 900)   # lớp lớn: trọng số nhỏ
+    assert w.max() == pytest.approx(10.0)                                          # bị chặn ở 10
+    loss = PosWeightedBCE(w)(torch.randn(4, NUM_CLASSES, requires_grad=True), torch.tensor([0, 1, 2, 3]))
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert build_loss({"loss": {"name": "bce", "pos_weight_clip": 0}}, LABELS).pos_weight is None
+
+
+def test_postprocess_auto_and_sigmoid():
+    assert resolve_postprocess({"loss": {"name": "bce"}, "predict": {"postprocess": "auto"}}) == "sigmoid"
+    assert resolve_postprocess({"loss": {"name": "ce"}, "predict": {"postprocess": "auto"}}) == "top1"
+    assert resolve_postprocess({"loss": {"name": "ce"}, "predict": {"postprocess": "top1"}}) == "top1"
+    assert output_activation({"loss": {"name": "bce"}}) == "sigmoid"
+    with pytest.raises(ValueError):
+        resolve_postprocess({"loss": {"name": "ce"}, "predict": {"postprocess": "sigmoid"}})
+    p = np.full((2, NUM_CLASSES), 0.1); p[0, [1, 9]] = 0.8        # sigmoid: 2 lớp dương ở lesion 0
+    assert (postprocess(p, "sigmoid") == p).all()
+    m = compute_metrics(np.array([1, 0]), p, "sigmoid")
+    assert m["per_class"]["BCC"]["sensitivity"] == 1.0 and m["per_class"]["SCCKA"]["specificity"] < 1.0
+    assert np.isfinite(nll(p, np.array([1, 0]), "sigmoid"))
+
+
+@pytest.mark.parametrize("resize", ["pad", "squash"])
+@pytest.mark.parametrize("aug", ["basic", "strong"])
+def test_transforms_resize_aug(resize, aug):
+    im = _Image.new("RGB", (600, 450), (255, 255, 255))
+    for train in (True, False):
+        x = _bt(224, train, resize=resize, aug=aug)(im)
+        assert x.shape == (3, 224, 224) and torch.isfinite(x).all()
+    val = _bt(224, False, resize=resize, aug=aug)(im)
+    has_pad = (val[:, :20] < 0).all()            # pad đen ở mép trên (âm sau normalize), squash thì không
+    assert bool(has_pad) == (resize == "pad")
+    with pytest.raises(ValueError):
+        _bt(224, False, resize="crop")
+
+
+def test_drop_path_and_bce_longtail_guard(tmp_path):
+    cfg = load_config(ROOT / "configs/default.yaml", ["model.pretrained=false", "model.backbone=vit_tiny_patch16_224",
+                                                     "model.drop_path_rate=0.1", "data.img_size=64"])
+    m = build_model(cfg)
+    assert any(type(x).__name__ == "DropPath" for x in m.modules())
+    cfg_lt = load_config([ROOT / "configs/default.yaml", ROOT / "configs/moe/D.yaml", ROOT / "configs/imbalance/bce.yaml"])
+    from milk10k.metrics import output_activation as oa
+    assert oa(cfg_lt) == "sigmoid"     # engine sẽ báo lỗi khi gặp tổ hợp này với hướng long-tail
+
+
+@pytest.mark.parametrize("ov", sorted((ROOT / "configs" / "ablation").glob("*.yaml")), ids=lambda p: p.stem)
+def test_ablation_overlays_valid(ov):
+    cfg = load_config([ROOT / "configs/baselines/vit_base.yaml", ov])
+    assert cfg["tag"] == yaml.safe_load(ov.read_text(encoding="utf-8"))["tag"]
+    assert torch.isfinite(build_loss(cfg, LABELS)(torch.randn(4, NUM_CLASSES), torch.tensor([0, 1, 2, 3])))
+
+
+def test_grid_skip_lt_base_and_inherited_sampler():
+    exp = _exp("stage3_moe.yaml")
+    jobs = run_grid.build_jobs(exp, None, ["vit_base"], only_archs=["B", "D"], only_overlays=["r5_all", "r5_nobce"],
+                               only_views=["clin+derm"], lt_base=False)
+    assert sorted(j.name for j in jobs) == ["vit_base__B__r5_all__clin+derm", "vit_base__B__r5_nobce__clin+derm",
+                                            "vit_base__D__r5_nobce__clin+derm"]
+    jobs4 = run_grid.build_jobs(_exp("stage4_ablation.yaml"), None, ["vit_base"], only_views=["clin+derm"])
+    assert [j.name.split("__")[1] for j in jobs4] == ["r1_bce", "r2_squash", "r3_aug", "r4_lr", "r5_all"]

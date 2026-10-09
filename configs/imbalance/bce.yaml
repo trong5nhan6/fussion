@@ -1,0 +1,6 @@
+# BCE + pos_weight: mỗi lớp là bài toán nhị phân độc lập (sigmoid), khớp cách chấm ISIC (ngưỡng 0.5 từng lớp).
+# pos_weight = n_âm / n_dương (chặn 10). Không sampler. Hậu xử lý tự chuyển sang sigmoid (predict.postprocess: auto).
+# Chỉ dùng cho mô hình chỉ ảnh và MoE A, B (C, D, E có 3 head long-tail riêng).
+tag: bce
+loss: {name: bce, class_weight: none, pos_weight_clip: 10.0}
+train: {sampler_q: null}

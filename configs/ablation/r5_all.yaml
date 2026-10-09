@@ -1,0 +1,7 @@
+# R5: gộp tất cả — BCE + sigmoid, resize thẳng, augmentation mạnh, lr backbone = lr, drop path 0.1.
+# Dùng cho mô hình chỉ ảnh và MoE A, B.
+base: ../imbalance/bce.yaml
+tag: r5_all
+data: {resize: squash, aug: strong}
+train: {backbone_lr_mult: 1.0}
+model: {drop_path_rate: 0.1}

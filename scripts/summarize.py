@@ -25,8 +25,13 @@ TAG_ORDER = ["ce_plain", "ce_sqrtinv", "ce_inv", "cb_b0999", "cb_focal", "la_t1"
 TAG_NAMES = {"ce_plain": "CE", "ce_sqrtinv": "CE + √inv weight", "ce_inv": "CE + inv weight",
              "cb_b0999": "Class-Balanced (β=0.999)", "cb_focal": "CB Focal (γ=2)", "la_t1": "Logit-adjusted (τ=1)",
              "samp_q05": "Sampler q=0.5", "samp_q1": "Sampler q=1", "crt": "cRT (decoupling)",
-             "lt": "3 head long-tail (loss riêng)"}
-TAG_ORDER_MOE = TAG_ORDER + ["lt"]
+             "lt": "3 head long-tail (loss riêng)", "bce": "BCE + pos_weight (sigmoid)",
+             "r1_bce": "R1: BCE + sigmoid", "r2_squash": "R2: resize thẳng", "r3_aug": "R3: augmentation mạnh",
+             "r4_lr": "R4: lr backbone ×1 + drop path", "r5_all": "R5: gộp tất cả (BCE)",
+             "r5_nobce": "R5 không BCE (sampler q=0.5)"}
+TAG_ORDER = TAG_ORDER + ["bce"]
+ABLATION_ORDER = ["samp_q05", "r1_bce", "r2_squash", "r3_aug", "r4_lr", "r5_all"]   # R0 = samp_q05 (stage 2)
+TAG_ORDER_MOE = TAG_ORDER + ["lt", "r5_all", "r5_nobce"]
 METRICS = [name for _, name in LEADERBOARD_COLUMNS]
 
 
@@ -145,6 +150,16 @@ def main():
         md += [f"## Stage 2 — Xử lý mất cân bằng ({bb}): Dice theo phương pháp × nhánh ảnh", "", bold_max(t), ""]
         full = g.assign(method=g.tag.map(TAG_NAMES).fillna(g.tag)).set_index(["method", "views"])[METRICS]
         md += [f"<details><summary>Đầy đủ 6 metric ({bb})</summary>", "",
+               full.sort_values("Dice Coefficient", ascending=False).to_markdown(floatfmt=".4f"), "", "</details>", ""]
+
+    abl = img[img.tag.isin(ABLATION_ORDER[1:])]
+    for bb in sorted(abl.backbone.unique()):
+        g = img[(img.backbone == bb) & img.tag.isin(ABLATION_ORDER)]
+        t = pivot(g, "tag", ABLATION_ORDER, {**TAG_NAMES, "samp_q05": "R0: mốc (sampler q=0.5, softmax)"})
+        t.to_csv(out / f"stage4_ablation_{bb}.csv")
+        md += [f"## Stage 4 — Ablation ({bb}): Dice theo yếu tố × nhánh ảnh", "", bold_max(t), ""]
+        full = g.assign(method=g.tag.map(TAG_NAMES).fillna(g.tag)).set_index(["method", "views"])[METRICS]
+        md += [f"<details><summary>Đầy đủ 6 metric — ablation ({bb})</summary>", "",
                full.sort_values("Dice Coefficient", ascending=False).to_markdown(floatfmt=".4f"), "", "</details>", ""]
 
     ml = df[df.kind == "ml"]

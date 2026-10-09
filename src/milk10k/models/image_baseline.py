@@ -17,13 +17,15 @@ def check_views(views) -> list:
     return views
 
 
-def create_encoder(backbone: str, pretrained: bool, img_size: int, grad_checkpointing=False) -> nn.Module:
+def create_encoder(backbone: str, pretrained: bool, img_size: int, grad_checkpointing=False,
+                   drop_path_rate: float = 0.0) -> nn.Module:
     """Tạo backbone timm không có head (num_classes=0 -> trả về vector đặc trưng)."""
+    kw = {"drop_path_rate": drop_path_rate} if drop_path_rate else {}  # stochastic depth (regularization)
     try:
         # ViT/Swin cần biết img_size để nội suy position embedding / window
-        enc = timm.create_model(backbone, pretrained=pretrained, num_classes=0, img_size=img_size)
+        enc = timm.create_model(backbone, pretrained=pretrained, num_classes=0, img_size=img_size, **kw)
     except TypeError:
-        enc = timm.create_model(backbone, pretrained=pretrained, num_classes=0)
+        enc = timm.create_model(backbone, pretrained=pretrained, num_classes=0, **kw)
     if grad_checkpointing:
         enc.set_grad_checkpointing(True)
     return enc
@@ -31,10 +33,10 @@ def create_encoder(backbone: str, pretrained: bool, img_size: int, grad_checkpoi
 
 class ImageBaseline(nn.Module):
     def __init__(self, backbone: str, views, pretrained=True, dropout=0.3, img_size=224,
-                 grad_checkpointing=False, num_classes=NUM_CLASSES):
+                 grad_checkpointing=False, drop_path_rate=0.0, num_classes=NUM_CLASSES):
         super().__init__()
         self.views = check_views(views)
-        self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing)
+        self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing, drop_path_rate)
         self.head = nn.Sequential(
             nn.Dropout(dropout),
             nn.Linear(self.encoder.num_features * len(self.views), num_classes),

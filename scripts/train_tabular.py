@@ -25,7 +25,7 @@ from milk10k.config import load_config
 from milk10k.data import MetadataEncoder, load_test_df, load_train_df
 from milk10k.engine import log_leaderboard, nll
 from milk10k.inference import write_submission
-from milk10k.metrics import SUMMARY_KEYS, compute_metrics, summary_line
+from milk10k.metrics import SUMMARY_KEYS, compute_metrics, resolve_postprocess, summary_line
 from milk10k.utils import get_logger, resolve_path, save_json
 
 
@@ -94,7 +94,7 @@ def full_proba(model, X) -> np.ndarray:
 
 def run_model(name: str, cfg: dict, df: pd.DataFrame, test_df: pd.DataFrame):
     folds = cfg["train"]["folds"]
-    mode = cfg["predict"].get("postprocess", "top1")
+    mode = resolve_postprocess(cfg)
     tag = f"fold{folds[0]}" if len(folds) == 1 else f"{len(folds)}fold"
     run_name = f"ml_{name}__{tag}"
     run_dir = resolve_path(cfg["output_dir"]) / run_name

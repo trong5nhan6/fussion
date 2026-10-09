@@ -6,8 +6,8 @@ import pandas as pd
 import torch
 
 from . import CLASSES
-from .data import MetadataEncoder, MilkDataset, build_transforms, image_dir, load_test_df
-from .metrics import THRESHOLD, postprocess
+from .data import MetadataEncoder, MilkDataset, image_dir, load_test_df, transforms_from_cfg
+from .metrics import THRESHOLD, output_activation, postprocess, resolve_postprocess
 from .models import build_model
 
 ID_COL = "lesion_id"  # code chấm điểm (isic-challenge-scoring) chấp nhận "image" hoặc "lesion_id"
@@ -35,7 +35,7 @@ def validate_submission(sub: pd.DataFrame, expected_ids) -> None:
 
 
 def write_submission(ids, probs: np.ndarray, mode: str, out_dir: Path, expected_ids, logger=print) -> Path:
-    """Ghi submission.csv (điểm sau hậu xử lý, để nộp) và test_probs.csv (softmax thô, để ensemble sau)."""
+    """Ghi submission.csv (điểm sau hậu xử lý, để nộp) và test_probs.csv (xác suất thô, để ensemble sau)."""
     raw = pd.DataFrame(probs, columns=CLASSES)
     raw.insert(0, ID_COL, list(ids))
     raw.to_csv(out_dir / "test_probs.csv", index=False)
@@ -73,13 +73,14 @@ def predict_test(cfg: dict, run_dir: Path, device, tta: bool, logger=print) -> P
         model.load_state_dict(ckpt["model"])
         mean, std = model.normalization()
         ds = MilkDataset(test_df, image_dir(cfg, "test"), cfg["model"]["views"],
-                         build_transforms(cfg["data"]["img_size"], False, mean, std), meta_enc.transform(test_df))
-        fold_ids, probs, _ = predict(model, make_loader(ds, cfg, False), device, tta=tta, amp=amp)
+                         transforms_from_cfg(cfg, False, mean, std), meta_enc.transform(test_df))
+        fold_ids, probs, _ = predict(model, make_loader(ds, cfg, False), device, tta=tta, amp=amp,
+                                     activation=output_activation(cfg))
         if ids is not None and list(fold_ids) != list(ids):
             raise RuntimeError("Thứ tự lesion giữa các fold không khớp")
         ids = fold_ids
         all_probs.append(probs)
         logger(f"Test: {ckpt_path.parent.name}/{ckpt_path.name} xong (TTA={tta})")
 
-    return write_submission(ids, np.mean(all_probs, axis=0), cfg["predict"].get("postprocess", "top1"),
+    return write_submission(ids, np.mean(all_probs, axis=0), resolve_postprocess(cfg),
                             run_dir, test_df.lesion_id, logger)

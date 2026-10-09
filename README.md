@@ -16,6 +16,7 @@ Notebook tự clone repo, tải dữ liệu từ Google Drive và train trên **
 | [`02_imbalance`](notebooks/02_imbalance.ipynb) | Backbone tốt nhất × 9 phương pháp imbalance × 3 nhánh ảnh | 27 / backbone | T4 x2 |
 | [`03_ml_models`](notebooks/03_ml_models.ipynb) | 9 mô hình ML trên metadata (LogReg, SVM, KNN, RF, ExtraTrees, HGB, LightGBM, XGBoost, CatBoost) | 9 | Không |
 | [`04_results`](notebooks/04_results.ipynb) | Gộp output các notebook thành bảng báo cáo, file nộp tốt nhất, learning curve | — | Không |
+| [`06_ablation`](notebooks/06_ablation.ipynb) | Ablation từng yếu tố: BCE + sigmoid, resize thẳng, aug mạnh, lr backbone + drop path, gộp tất cả (ảnh + MoE B/D) | mặc định 7 | T4 x2 |
 | [`05_multimodal_moe`](notebooks/05_multimodal_moe.ipynb) | Multimodal MoE: chọn hướng (A–E) × loss × backbone × nhánh ảnh | tuỳ chọn (mặc định 30) | T4 x2 |
 
 **Chuẩn bị một lần:**
@@ -173,6 +174,19 @@ bash scripts/run_imbalance.sh configs/baselines/<backbone>.yaml      # chạy t�
 Tham số chỉnh qua `--set`, ví dụ `loss.la_tau=1.5`, `loss.cb_beta=0.9999`, `train.sampler_q=0.3`, `crt.epochs=5`.
 Run có cRT lưu thêm `fold*/oof_stage1.csv` (kết quả trước cRT) để so sánh trong cùng một lần chạy, và
 `predict.py` tự dùng `best_crt.pt`. Nếu vừa dùng sampler vừa reweight, log sẽ cảnh báo bù hai lần.
+
+## Tuỳ chọn tiền xử lý, loss và quyết định (stage 4)
+
+| Config | Giá trị | Ý nghĩa |
+|---|---|---|
+| `data.resize` | **`pad`** (mặc định) \| `squash` | Giữ tỉ lệ 4:3 + pad viền đen \| resize thẳng về vuông (dùng 100% điểm ảnh) — xem `EDA/figures/12_resize_comparison.png` |
+| `data.aug` | **`basic`** \| `strong` | Lật/affine/màu nhẹ \| RandomResizedCrop, xoay, màu, blur/nhiễu, affine, xoá vùng |
+| `model.drop_path_rate` | **0.0** | Stochastic depth của backbone |
+| `loss.name: bce` + `loss.pos_weight_clip` | 10 | Sigmoid độc lập từng lớp, pos_weight = n_âm/n_dương (chặn) — overlay `configs/imbalance/bce.yaml` |
+| `predict.postprocess` | **`auto`** \| `top1` \| `softmax` \| `sigmoid` | auto = sigmoid nếu loss bce (mỗi lớp tự so 0.5, cho phép nhiều lớp dương), ngược lại top1 |
+
+Overlay ablation trong `configs/ablation/` (R1–R5, `r5_nobce` cho MoE long-tail); lưới `experiments/stage4_ablation.yaml`.
+BCE không dùng được với hướng long-tail C/D/E.
 
 ## Multimodal MoE (`model.name: moe`)
 

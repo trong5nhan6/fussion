@@ -17,9 +17,9 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm.auto import tqdm
 
 from . import CLASSES
-from .data import MetadataEncoder, MilkDataset, build_transforms, image_dir
+from .data import MetadataEncoder, MilkDataset, image_dir, transforms_from_cfg
 from .losses import build_loss, class_counts, class_weights
-from .metrics import compute_metrics, leaderboard_table, summary_line
+from .metrics import compute_metrics, leaderboard_table, output_activation, resolve_postprocess, summary_line
 from .models import build_model
 from .models.moe import LONGTAIL_ARCHS
 from .profiling import device_report, model_report, peak_memory_gb
@@ -64,11 +64,13 @@ def warmup_cosine(optimizer, warmup_steps: int, total_steps: int):
 
 
 @torch.no_grad()
-def predict(model, loader, device, tta=False, amp=False, max_batches=None, explain=None):
+def predict(model, loader, device, tta=False, amp=False, max_batches=None, explain=None, activation="softmax"):
     """Trả về (lesion_ids, probs[N, C], labels hoặc None).
 
     explain: dict rỗng -> được điền {tên: mảng [N]} từ model.last_explain (gate/expert của ảnh gốc, không lật).
+    activation: softmax (xác suất cộng lại bằng 1) | sigmoid (độc lập từng lớp, khi train bằng BCE).
     """
+    act = (lambda z: z.float().sigmoid()) if activation == "sigmoid" else (lambda z: z.float().softmax(dim=1))
     model.eval()
     ids, probs, labels = [], [], []
     parts = {}
@@ -83,7 +85,7 @@ def predict(model, loader, device, tta=False, amp=False, max_batches=None, expla
         with torch.autocast(device_type=device.type, enabled=amp):
             outs = []
             for j, v in enumerate(variants):
-                outs.append(model(v).float().softmax(dim=1))
+                outs.append(act(model(v)))
                 if j == 0 and explain is not None:
                     for k, t in getattr(model, "last_explain", {}).items():
                         parts.setdefault(k, []).append(t.float().cpu().numpy())
@@ -97,13 +99,18 @@ def predict(model, loader, device, tta=False, amp=False, max_batches=None, expla
     return ids, np.concatenate(probs), (np.concatenate(labels) if labels else None)
 
 
-def nll(probs: np.ndarray, labels: np.ndarray) -> float:
-    """Cross-entropy (không trọng số) từ xác suất — loss val so sánh được giữa mọi cấu hình loss."""
+def nll(probs: np.ndarray, labels: np.ndarray, activation: str = "softmax") -> float:
+    """Loss val không trọng số từ xác suất: CE (softmax) hoặc BCE trung bình các lớp (sigmoid)."""
+    if activation == "sigmoid":
+        p = np.clip(probs, 1e-7, 1 - 1e-7)
+        y = np.eye(probs.shape[1])[labels]
+        return float(-(y * np.log(p) + (1 - y) * np.log(1 - p)).mean())
     return float(-np.log(np.clip(probs[np.arange(len(labels)), labels], 1e-12, None)).mean())
 
 
 def _run_stage(*, model, tr_dl, va_dl, criterion, optimizer, epochs, warmup_epochs, accum, patience,
-               monitor, mode, ckpt_path, ckpt_extra, set_train_mode, device, use_amp, max_batches, logger, prefix):
+               monitor, mode, ckpt_path, ckpt_extra, set_train_mode, device, use_amp, max_batches, logger, prefix,
+               activation="softmax"):
     """Vòng train + validate mỗi epoch, lưu checkpoint tốt nhất theo `monitor`. Trả về lịch sử."""
     steps_per_epoch = min(len(tr_dl), max_batches or len(tr_dl))
     opt_steps = math.ceil(steps_per_epoch / accum)
@@ -141,11 +148,12 @@ def _run_stage(*, model, tr_dl, va_dl, criterion, optimizer, epochs, warmup_epoc
             pbar.set_postfix(loss=f"{loss_sum / seen:.4f}", acc=f"{correct / seen:.3f}")
         train_time = time.time() - t0
 
-        _, va_probs, va_labels = predict(model, va_dl, device, amp=use_amp, max_batches=max_batches)
+        _, va_probs, va_labels = predict(model, va_dl, device, amp=use_amp, max_batches=max_batches,
+                                         activation=activation)
         m = compute_metrics(va_labels, va_probs, mode)
         row = {"epoch": epoch, "lr": optimizer.param_groups[-1]["lr"],
                "train_loss": loss_sum / seen, "train_acc": correct / seen,
-               "val_loss": nll(va_probs, va_labels), "val_acc": m["top1_acc"],
+               "val_loss": nll(va_probs, va_labels, activation), "val_acc": m["top1_acc"],
                **{k: m[k] for k in ("auc", "ap", "accuracy", "sensitivity", "specificity", "dice", "balanced_acc")},
                "time_s": time.time() - t0, "train_time_s": train_time}
         mem = peak_memory_gb(device)
@@ -184,7 +192,7 @@ def _final_oof(model, ckpt_path, va_dl, cfg, device, use_amp, max_batches, fold)
     model.load_state_dict(torch.load(ckpt_path, map_location=device)["model"])
     explain = {}
     ids, probs, labels = predict(model, va_dl, device, tta=cfg["predict"]["tta"], amp=use_amp,
-                                 max_batches=max_batches, explain=explain)
+                                 max_batches=max_batches, explain=explain, activation=output_activation(cfg))
     return _oof_frame(ids, probs, labels, fold, explain)
 
 
@@ -205,7 +213,10 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
                        f"balance_alpha={e.get('balance_alpha')}" if arch in "BC" else "")
                     + (f" | lt_taus={e.get('lt_taus')} (bỏ qua loss overlay)" if arch in LONGTAIL_ARCHS else ""))
     logger.info(device_report(device))
-    logger.info(f"Dữ liệu      : train {len(tr_df)} | val {len(va_df)} | img_size {cfg['data']['img_size']}")
+    d = cfg["data"]
+    logger.info(f"Dữ liệu      : train {len(tr_df)} | val {len(va_df)} | img_size {d['img_size']} | "
+                f"resize {d.get('resize', 'pad')} | aug {d.get('aug', 'basic')} | "
+                f"drop_path {cfg['model'].get('drop_path_rate', 0.0)}")
     counts = pd.DataFrame({"train": tr_df.label.value_counts(), "val": va_df.label.value_counts()}) \
         .reindex(range(len(CLASSES))).fillna(0).astype(int)
     logger.info("Phân bố lớp  : " + ", ".join(f"{c}={t}/{v}" for c, (t, v) in zip(CLASSES, counts.values))
@@ -218,13 +229,17 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
         logger.info(f"Loss         : {lc['name']} | class_weight={lc.get('class_weight')}"
                     + (f" [{', '.join(f'{x:.2f}' for x in w.tolist())}]" if w is not None else "")
                     + (f" | tau={lc.get('la_tau')}" if lc["name"] == "logit_adjusted" else "")
-                    + (f" | gamma={lc.get('focal_gamma')}" if lc["name"] == "focal" else ""))
+                    + (f" | gamma={lc.get('focal_gamma')}" if lc["name"] == "focal" else "")
+                    + (f" | pos_weight clip={lc.get('pos_weight_clip', 10.0)} (sigmoid độc lập từng lớp)"
+                       if lc["name"] == "bce" else ""))
     logger.info(f"Huấn luyện   : epochs {tc['epochs']} | batch {tc['batch_size']} x accum {tc.get('accum_steps', 1)} "
                 f"| AdamW lr {tc['lr']} (backbone x{tc['backbone_lr_mult']}) wd {tc['weight_decay']} "
                 f"| warmup {tc['warmup_epochs']} | sampler_q {tc.get('sampler_q')} | amp {tc.get('amp')} "
                 f"| monitor {tc['monitor']} | patience {tc['patience']}")
-    logger.info(f"Đánh giá     : ngưỡng > 0.5 mỗi lớp, hậu xử lý={cfg['predict'].get('postprocess', 'top1')} "
-                f"| val loss = CE không trọng số | acc = top-1 đa lớp")
+    act = output_activation(cfg)
+    loss_kind = "BCE" if act == "sigmoid" else "CE"
+    logger.info(f"Đánh giá     : ngưỡng > 0.5 mỗi lớp, hậu xử lý={resolve_postprocess(cfg)} | xác suất={act} "
+                f"| val loss = {loss_kind} không trọng số | acc = top-1 đa lớp")
     lc_, q = cfg["loss"], tc.get("sampler_q")
     if q and (lc_.get("class_weight") not in (None, "none") or lc_["name"] == "logit_adjusted"):
         logger.info("CẢNH BÁO: vừa dùng sampler (q>0) vừa reweight/logit-adjust -> bù mất cân bằng hai lần")
@@ -233,7 +248,8 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
 
 def train_one_fold(cfg: dict, fold: int, df: pd.DataFrame, run_dir: Path, device, logger) -> pd.DataFrame:
     tc = cfg["train"]
-    mode = cfg["predict"].get("postprocess", "top1")
+    mode = resolve_postprocess(cfg)
+    activation = output_activation(cfg)
     fold_dir = run_dir / f"fold{fold}"
     fold_dir.mkdir(parents=True, exist_ok=True)
     tr_df, va_df = df[df.fold != fold].reset_index(drop=True), df[df.fold == fold].reset_index(drop=True)
@@ -241,6 +257,8 @@ def train_one_fold(cfg: dict, fold: int, df: pd.DataFrame, run_dir: Path, device
 
     meta_enc = MetadataEncoder().fit(tr_df)
     model = build_model(cfg, meta_enc.dim).to(device)
+    if activation == "sigmoid" and getattr(model, "longtail", False):
+        raise ValueError("loss bce (sigmoid) không dùng được với hướng long-tail C/D/E (3 head softmax riêng)")
     if hasattr(model, "set_class_prior"):  # prior lớp mà mô hình thực sự thấy khi train: P(c) ∝ n_c^(1-q)
         q = tc.get("sampler_q") or 0.0
         eff = np.maximum(class_counts(tr_labels), 1) ** (1.0 - float(q))
@@ -250,14 +268,14 @@ def train_one_fold(cfg: dict, fold: int, df: pd.DataFrame, run_dir: Path, device
     img_dir = image_dir(cfg, "train")
     size = cfg["data"]["img_size"]
     views = cfg["model"]["views"]
-    tr_ds = MilkDataset(tr_df, img_dir, views, build_transforms(size, True, mean, std), meta_enc.transform(tr_df))
-    va_ds = MilkDataset(va_df, img_dir, views, build_transforms(size, False, mean, std), meta_enc.transform(va_df))
+    tr_ds = MilkDataset(tr_df, img_dir, views, transforms_from_cfg(cfg, True, mean, std), meta_enc.transform(tr_df))
+    va_ds = MilkDataset(va_df, img_dir, views, transforms_from_cfg(cfg, False, mean, std), meta_enc.transform(va_df))
     va_dl = make_loader(va_ds, cfg, False)
 
     max_batches = DEBUG_BATCHES if cfg.get("debug") else None
     use_amp = tc.get("amp", False) and device.type == "cuda"
     common = dict(model=model, va_dl=va_dl, monitor=tc["monitor"], mode=mode, device=device, use_amp=use_amp,
-                  max_batches=max_batches, logger=logger)
+                  max_batches=max_batches, logger=logger, activation=activation)
 
     # ---- Giai đoạn 1: train toàn bộ
     best_path = fold_dir / "best.pt"

@@ -19,14 +19,15 @@ def _build_image(cfg: dict, meta_dim: int):
     m = cfg["model"]
     return ImageBaseline(m["backbone"], m["views"], pretrained=m.get("pretrained", True),
                          dropout=m.get("dropout", 0.3), img_size=cfg["data"]["img_size"],
-                         grad_checkpointing=m.get("grad_checkpointing", False))
+                         grad_checkpointing=m.get("grad_checkpointing", False),
+                         drop_path_rate=m.get("drop_path_rate", 0.0))
 
 
 def _build_moe(cfg: dict, meta_dim: int):
     m, e = cfg["model"], cfg.get("moe", {})
     return MultimodalMoE(m["arch"], m["backbone"], m["views"], pretrained=m.get("pretrained", True),
                          img_size=cfg["data"]["img_size"], grad_checkpointing=m.get("grad_checkpointing", False),
-                         head_dropout=m.get("dropout", 0.3), **e)
+                         head_dropout=m.get("dropout", 0.3), drop_path_rate=m.get("drop_path_rate", 0.0), **e)
 
 
 MODELS = {

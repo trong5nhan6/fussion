@@ -20,14 +20,31 @@ PER_CLASS_KEYS = ["auc", "ap", "accuracy", "sensitivity", "specificity", "dice",
 SUMMARY_KEYS = ["dice", "auc", "ap", "accuracy", "sensitivity", "specificity", "balanced_acc", "top1_acc"]
 
 
-def postprocess(probs: np.ndarray, mode: str = "top1") -> np.ndarray:
-    """Biến xác suất softmax thành điểm nộp bài.
+def output_activation(cfg: dict) -> str:
+    """Hàm biến logit thành xác suất: sigmoid độc lập từng lớp nếu train bằng BCE, còn lại softmax."""
+    return "sigmoid" if cfg.get("loss", {}).get("name") == "bce" else "softmax"
 
+
+def resolve_postprocess(cfg: dict) -> str:
+    """predict.postprocess: auto (mặc định) -> sigmoid nếu loss là BCE, ngược lại top1."""
+    mode = cfg.get("predict", {}).get("postprocess", "auto")
+    if mode == "auto":
+        return "sigmoid" if output_activation(cfg) == "sigmoid" else "top1"
+    if mode == "sigmoid" and output_activation(cfg) != "sigmoid":
+        raise ValueError("predict.postprocess=sigmoid chỉ dùng với loss.name=bce (xác suất sigmoid độc lập)")
+    return mode
+
+
+def postprocess(probs: np.ndarray, mode: str = "top1") -> np.ndarray:
+    """Biến xác suất thành điểm nộp bài.
+
+    sigmoid: giữ nguyên xác suất sigmoid độc lập (train bằng BCE) -> mỗi lớp tự so ngưỡng 0.5,
+             một lesion có thể dương ở 0, 1 hoặc nhiều lớp.
     softmax: giữ nguyên. Nhiều lesion có max < 0.5 -> không lớp nào được tính dương.
     top1:    lớp argmax -> 0.5 + 0.5p (luôn > 0.5), các lớp khác -> 0.5p (luôn < 0.5).
              Mỗi lesion có đúng 1 lớp dương, khớp với nhãn đơn lớp; thứ tự điểm trong từng nhóm được giữ.
     """
-    if mode == "softmax":
+    if mode in ("softmax", "sigmoid"):
         return probs
     if mode == "top1":
         out = 0.5 * probs

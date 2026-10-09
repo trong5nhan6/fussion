@@ -14,20 +14,20 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from milk10k import CLASSES  # noqa: E402
 from milk10k.config import load_config  # noqa: E402
-from milk10k.metrics import compute_metrics, confusion, leaderboard_table, summary_line  # noqa: E402
+from milk10k.metrics import compute_metrics, confusion, leaderboard_table, resolve_postprocess, summary_line  # noqa: E402
 from milk10k.utils import resolve_path  # noqa: E402
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", required=True)
-    ap.add_argument("--postprocess", choices=["top1", "softmax"], default=None)
+    ap.add_argument("--postprocess", choices=["top1", "softmax", "sigmoid"], default=None)
     args = ap.parse_args()
     run_dir = resolve_path(args.run)
     mode = args.postprocess
     if mode is None:
         cfg_path = run_dir / "config.yaml"
-        mode = load_config(cfg_path)["predict"].get("postprocess", "top1") if cfg_path.exists() else "top1"
+        mode = resolve_postprocess(load_config(cfg_path)) if cfg_path.exists() else "top1"
 
     oof = pd.read_csv(run_dir / "oof.csv")
     y, p = oof.label.to_numpy(), oof[CLASSES].to_numpy()

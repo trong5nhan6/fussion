@@ -24,11 +24,11 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 import yaml
 
-from milk10k.config import load_config
+from milk10k.config import _load_yaml, load_config
 from milk10k.utils import PROJECT_ROOT, load_json, resolve_path
 
 # Tham số in ra khi --dry-run để kiểm tra cấu hình thực tế (sau khi gộp config + overlay + env + --set)
-SHOW_KEYS = ["model.name", "model.arch", "data.img_size", "train.batch_size", "train.accum_steps", "train.epochs", "train.patience", "train.lr",
+SHOW_KEYS = ["model.name", "model.arch", "data.img_size", "data.resize", "data.aug", "model.drop_path_rate", "train.batch_size", "train.accum_steps", "train.epochs", "train.patience", "train.lr",
              "train.backbone_lr_mult", "train.weight_decay", "train.folds", "model.grad_checkpointing",
              "model.dropout", "loss.name", "loss.class_weight", "train.sampler_q", "crt.enabled",
              "predict.tta", "predict.postprocess"]
@@ -47,7 +47,8 @@ class Job:
 
 
 def _yaml(path) -> dict:
-    return yaml.safe_load(resolve_path(path).read_text(encoding="utf-8")) or {}
+    """Đọc 1 file config, giải quyết kế thừa `base:` (overlay ablation kế thừa overlay imbalance)."""
+    return _load_yaml(resolve_path(path))
 
 
 def _is_sampler_overlay(path) -> bool:
@@ -63,11 +64,11 @@ def _check(kind: str, chosen, available, exp_name: str):
 
 
 def build_jobs(exp: dict, env: str | None, only_backbones=None, extra_set=(), suffix: str = "",
-               only_archs=None, only_overlays=None, only_views=None) -> list[Job]:
+               only_archs=None, only_overlays=None, only_views=None, lt_base: bool = True) -> list[Job]:
     """Sinh danh sách run: backbone x [hướng MoE] x overlay x nhánh ảnh.
 
     Tên run: <backbone>[__<hướng>]__<tag>__<views>[__<hậu tố>]. Hướng long-tail (C, D) tự có loss riêng
-    -> chỉ giữ overlay sampler, cộng 1 run không overlay (tag "lt").
+    -> chỉ giữ overlay sampler, cộng 1 run không overlay (tag "lt"; tắt bằng lt_base=False).
     """
     archs = exp.get("archs") or {None: None}
     overlays = exp.get("overlays") or [None]
@@ -88,7 +89,7 @@ def build_jobs(exp: dict, env: str | None, only_backbones=None, extra_set=(), su
             longtail = bool(arch) and ARCHS[_yaml(arch_cfg)["model"]["arch"]][1]
             ovs = [o for o in overlays if o is None or not only_overlays or Path(o).stem in only_overlays]
             if longtail:
-                ovs = [None] + [o for o in ovs if o and _is_sampler_overlay(o)]
+                ovs = [None] * lt_base + [o for o in ovs if o and _is_sampler_overlay(o)]
             for ov in ovs:
                 tag = _yaml(ov)["tag"] if ov else ("lt" if longtail else "default")
                 for views in exp["views"]:
@@ -250,6 +251,8 @@ def main():
     ap.add_argument("--archs", default=None, help="Chỉ chạy các hướng MoE này, vd A,B,C,D")
     ap.add_argument("--overlays", default=None, help="Chỉ dùng các overlay này (tên file), vd ce_sqrt_inv,sampler_q05")
     ap.add_argument("--views", default=None, help="Chỉ chạy các nhánh ảnh này, vd clin,derm,clin+derm")
+    ap.add_argument("--skip-lt-base", action="store_true",
+                    help="Hướng long-tail (C, D, E): không thêm run không overlay (tag lt)")
     ap.add_argument("--gpus", default="auto", help="auto | cpu | 0,1")
     ap.add_argument("--restore", nargs="*", default=[], help="Thư mục outputs của phiên trước")
     ap.add_argument("--time-budget-h", type=float, default=11.0, help="Kaggle giới hạn 12 giờ/phiên")
@@ -264,7 +267,7 @@ def main():
     exp = yaml.safe_load(resolve_path(args.experiment).read_text(encoding="utf-8"))
     split = lambda v: [x.strip() for x in v.split(",") if x.strip()] if v else None  # noqa: E731
     jobs = build_jobs(exp, args.env, split(args.backbones), args.set, args.suffix,
-                      split(args.archs), split(args.overlays), split(args.views))
+                      split(args.archs), split(args.overlays), split(args.views), lt_base=not args.skip_lt_base)
     out_dir = resolve_path("outputs")
     out_dir.mkdir(exist_ok=True)
     if args.restore:

@@ -12,7 +12,9 @@ data:
   train_img_dir: train/MILK10k_Training_Input
   test_img_dir: test/MILK10k_Test_Input
   folds_csv: splits/folds_5.csv   # nằm trong repo (scripts/make_folds.py), để mọi máy dùng cùng cách chia
-  img_size: 320          # ảnh gốc 600x450 (4:3) -> resize giữ tỉ lệ rồi pad thành vuông
+  img_size: 320          # kích thước ảnh vuông đưa vào mô hình
+  resize: pad            # pad: giữ tỉ lệ 4:3 + pad viền đen | squash: resize thẳng về vuông (dùng 100% điểm ảnh)
+  aug: basic             # basic: lật, affine, màu nhẹ | strong: RandomResizedCrop, xoay, màu, blur/nhiễu, xoá vùng
   num_workers: 4
 
 model:
@@ -23,6 +25,7 @@ model:
   # Đổi nhanh từ CLI: --set model.views=[derm]
   views: [clin, derm]
   dropout: 0.3
+  drop_path_rate: 0.0    # stochastic depth của backbone (0.1–0.2 giúp giảm overfit)
   grad_checkpointing: false  # true: giảm VRAM (~40-60%), train chậm hơn ~20-30%
 
 # Multimodal MoE (model.name: moe, chọn hướng bằng configs/moe/{A,B,C,D}.yaml)
@@ -41,10 +44,11 @@ moe:
 
 # Xử lý mất cân bằng — xem src/milk10k/losses.py và configs/imbalance/
 loss:
-  name: ce               # ce | focal | logit_adjusted
+  name: ce               # ce | focal | logit_adjusted | bce (sigmoid độc lập từng lớp)
   class_weight: sqrt_inv # none | inv | sqrt_inv | effective_num
   cb_beta: 0.999         # cho effective_num; tiến về 1 thì gần với inv
   la_tau: 1.0            # cho logit_adjusted
+  pos_weight_clip: 10.0  # cho bce: pos_weight = n_âm/n_dương, chặn tối đa (0 = không dùng pos_weight)
   focal_gamma: 2.0
   label_smoothing: 0.0
 
@@ -77,6 +81,7 @@ predict:
   # Cuộc thi nhị phân hoá MỖI lớp theo ngưỡng > 0.5 (không lấy argmax):
   #   top1    : lớp argmax -> 0.5+0.5p, lớp khác -> 0.5p  => mỗi lesion đúng 1 lớp dương
   #   softmax : giữ xác suất thô (lesion có max < 0.5 sẽ không có lớp dương nào)
+  #   sigmoid : (loss bce) xác suất sigmoid độc lập, mỗi lớp tự so 0.5 -> 0, 1 hoặc nhiều lớp dương
   # Metric val được tính trên điểm SAU hậu xử lý -> khớp cách chấm leaderboard.
-  postprocess: top1
+  postprocess: auto      # auto: sigmoid nếu loss=bce, ngược lại top1 | top1 | softmax | sigmoid
   after_train: true      # train xong tự sinh submission.csv cho tập test

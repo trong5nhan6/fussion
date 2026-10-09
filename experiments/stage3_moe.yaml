@@ -26,6 +26,9 @@ overlays:
   - configs/imbalance/sampler_q05.yaml
   - configs/imbalance/sampler_q1.yaml
   - configs/imbalance/crt.yaml
+  - configs/imbalance/bce.yaml
+  - configs/ablation/r5_all.yaml     # BCE + squash + aug mạnh + lr + drop path (A, B)
+  - configs/ablation/r5_nobce.yaml   # như trên nhưng giữ sampler, không BCE (C, D, E)
 views:
   - [clin]
   - [derm]
