@@ -6,8 +6,13 @@ Mỗi mô hình nhận `batch` (dict: images, meta, label) và cần có:
   - normalization() -> (mean, std) dùng cho transform ảnh
   - head_module() -> nn.Module classifier (dùng cho cRT)
   - thuộc tính `uses_metadata` (mặc định False)
+Tuỳ chọn (engine tự gọi nếu có):
+  - compute_loss(logits, y, criterion) -> loss (thêm loss phụ, load-balancing, ...)
+  - set_class_prior(prior) -> nhận prior lớp hiệu dụng khi train
+  - last_explain: dict tensor [B] (gate, expert) -> ghi vào oof.csv
 """
 from .image_baseline import ImageBaseline
+from .moe import MultimodalMoE
 
 
 def _build_image(cfg: dict, meta_dim: int):
@@ -17,8 +22,16 @@ def _build_image(cfg: dict, meta_dim: int):
                          grad_checkpointing=m.get("grad_checkpointing", False))
 
 
+def _build_moe(cfg: dict, meta_dim: int):
+    m, e = cfg["model"], cfg.get("moe", {})
+    return MultimodalMoE(m["arch"], m["backbone"], m["views"], pretrained=m.get("pretrained", True),
+                         img_size=cfg["data"]["img_size"], grad_checkpointing=m.get("grad_checkpointing", False),
+                         head_dropout=m.get("dropout", 0.3), **e)
+
+
 MODELS = {
     "image": _build_image,
+    "moe": _build_moe,      # multimodal MoE, hướng A/B/C/D (configs/moe/)
 }
 
 

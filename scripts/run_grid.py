@@ -28,7 +28,7 @@ from milk10k.config import load_config
 from milk10k.utils import PROJECT_ROOT, load_json, resolve_path
 
 # Tham số in ra khi --dry-run để kiểm tra cấu hình thực tế (sau khi gộp config + overlay + env + --set)
-SHOW_KEYS = ["data.img_size", "train.batch_size", "train.accum_steps", "train.epochs", "train.patience", "train.lr",
+SHOW_KEYS = ["model.name", "model.arch", "data.img_size", "train.batch_size", "train.accum_steps", "train.epochs", "train.patience", "train.lr",
              "train.backbone_lr_mult", "train.weight_decay", "train.folds", "model.grad_checkpointing",
              "model.dropout", "loss.name", "loss.class_weight", "train.sampler_q", "crt.enabled",
              "predict.tta", "predict.postprocess"]
@@ -46,24 +46,62 @@ class Job:
     extra: dict = field(default_factory=dict)
 
 
-def build_jobs(exp: dict, env: str | None, only_backbones=None, extra_set=(), suffix: str = "") -> list[Job]:
-    unknown = set(only_backbones or []) - set(exp["backbones"])
+def _yaml(path) -> dict:
+    return yaml.safe_load(resolve_path(path).read_text(encoding="utf-8")) or {}
+
+
+def _is_sampler_overlay(path) -> bool:
+    """Overlay chỉ đổi cách lấy mẫu (sampler_q), không đổi loss/cRT -> vẫn dùng được với head long-tail."""
+    d = _yaml(path)
+    return bool((d.get("train") or {}).get("sampler_q")) and not (d.get("crt") or {}).get("enabled")
+
+
+def _check(kind: str, chosen, available, exp_name: str):
+    unknown = set(chosen or []) - set(available)
     if unknown:
-        raise SystemExit(f"Backbone không có trong {exp['name']}: {sorted(unknown)}. Có: {list(exp['backbones'])}")
+        raise SystemExit(f"{kind} không có trong {exp_name}: {sorted(unknown)}. Có: {list(available)}")
+
+
+def build_jobs(exp: dict, env: str | None, only_backbones=None, extra_set=(), suffix: str = "",
+               only_archs=None, only_overlays=None, only_views=None) -> list[Job]:
+    """Sinh danh sách run: backbone x [hướng MoE] x overlay x nhánh ảnh.
+
+    Tên run: <backbone>[__<hướng>]__<tag>__<views>[__<hậu tố>]. Hướng long-tail (C, D) tự có loss riêng
+    -> chỉ giữ overlay sampler, cộng 1 run không overlay (tag "lt").
+    """
+    archs = exp.get("archs") or {None: None}
+    overlays = exp.get("overlays") or [None]
+    _check("Backbone", only_backbones, exp["backbones"], exp["name"])
+    _check("Hướng", only_archs, [a for a in archs if a], exp["name"])
+    _check("Overlay", only_overlays, [Path(o).stem for o in overlays if o], exp["name"])
+    _check("Nhánh ảnh", only_views, ["+".join(v) for v in exp["views"]], exp["name"])
+    if any(archs):
+        from milk10k.models.moe import ARCHS  # (fusion, longtail) theo hướng
     jobs = []
     for key, entry in exp["backbones"].items():
         if only_backbones and key not in only_backbones:
             continue
         entry = {"config": entry} if isinstance(entry, str) else entry
-        for ov in exp.get("overlays") or [None]:
-            tag = yaml.safe_load(resolve_path(ov).read_text(encoding="utf-8"))["tag"] if ov else "default"
-            for views in exp["views"]:
-                configs = [entry["config"]] + ([ov] if ov else []) + ([env] if env else [])
-                # thứ tự ưu tiên tăng dần: chung của lưới < riêng backbone < view < CLI
-                sets = [*(exp.get("set") or []), *(entry.get("set") or []),
-                        f"model.views=[{','.join(views)}]", *extra_set]
-                name = f"{key}__{tag}__{'+'.join(views)}" + (f"__{suffix}" if suffix else "")
-                jobs.append(Job(name, configs, sets))
+        for arch, arch_cfg in archs.items():
+            if only_archs and arch not in only_archs:
+                continue
+            longtail = bool(arch) and ARCHS[_yaml(arch_cfg)["model"]["arch"]][1]
+            ovs = [o for o in overlays if o is None or not only_overlays or Path(o).stem in only_overlays]
+            if longtail:
+                ovs = [None] + [o for o in ovs if o and _is_sampler_overlay(o)]
+            for ov in ovs:
+                tag = _yaml(ov)["tag"] if ov else ("lt" if longtail else "default")
+                for views in exp["views"]:
+                    vname = "+".join(views)
+                    if only_views and vname not in only_views:
+                        continue
+                    configs = [entry["config"], *([arch_cfg] if arch_cfg else []), *([ov] if ov else []),
+                               *([env] if env else [])]
+                    # thứ tự ưu tiên tăng dần: chung của lưới < riêng backbone < view < CLI
+                    sets = [*(exp.get("set") or []), *(entry.get("set") or []), f"model.views=[{','.join(views)}]",
+                            *extra_set]
+                    name = "__".join([key, *([arch] if arch else []), tag, vname]) + (f"__{suffix}" if suffix else "")
+                    jobs.append(Job(name, configs, sets, extra={"col": key + (f" {arch}" if arch else "")}))
     return jobs
 
 
@@ -73,7 +111,7 @@ def effective_table(jobs: list[Job]) -> str:
 
     cols = {}
     for j in jobs:
-        key = j.name.split("__")[0]
+        key = j.extra.get("col", j.name.split("__")[0])
         if key in cols:
             continue
         cfg = load_config([resolve_path(c) for c in j.configs], j.sets)
@@ -209,6 +247,9 @@ def main():
     ap.add_argument("experiment")
     ap.add_argument("--env", default=None, help="Profile môi trường, vd configs/env/kaggle_t4.yaml")
     ap.add_argument("--backbones", default=None, help="Chỉ chạy các backbone này, phân cách bằng dấu phẩy")
+    ap.add_argument("--archs", default=None, help="Chỉ chạy các hướng MoE này, vd A,B,C,D")
+    ap.add_argument("--overlays", default=None, help="Chỉ dùng các overlay này (tên file), vd ce_sqrt_inv,sampler_q05")
+    ap.add_argument("--views", default=None, help="Chỉ chạy các nhánh ảnh này, vd clin,derm,clin+derm")
     ap.add_argument("--gpus", default="auto", help="auto | cpu | 0,1")
     ap.add_argument("--restore", nargs="*", default=[], help="Thư mục outputs của phiên trước")
     ap.add_argument("--time-budget-h", type=float, default=11.0, help="Kaggle giới hạn 12 giờ/phiên")
@@ -221,8 +262,9 @@ def main():
     start = time.time()
 
     exp = yaml.safe_load(resolve_path(args.experiment).read_text(encoding="utf-8"))
-    only = [b.strip() for b in args.backbones.split(",")] if args.backbones else None
-    jobs = build_jobs(exp, args.env, only, args.set, args.suffix)
+    split = lambda v: [x.strip() for x in v.split(",") if x.strip()] if v else None  # noqa: E731
+    jobs = build_jobs(exp, args.env, split(args.backbones), args.set, args.suffix,
+                      split(args.archs), split(args.overlays), split(args.views))
     out_dir = resolve_path("outputs")
     out_dir.mkdir(exist_ok=True)
     if args.restore:

@@ -19,10 +19,14 @@ from milk10k.metrics import LEADERBOARD_COLUMNS
 from milk10k.utils import load_json, resolve_path
 
 VIEW_ORDER = ["clin", "derm", "clin+derm"]
+ARCH_NAMES = {"A": "A · gate theo nguồn", "B": "B · transformer MoE", "C": "C · B + long-tail",
+              "D": "D · A + long-tail"}
 TAG_ORDER = ["ce_plain", "ce_sqrtinv", "ce_inv", "cb_b0999", "cb_focal", "la_t1", "samp_q05", "samp_q1", "crt"]
 TAG_NAMES = {"ce_plain": "CE", "ce_sqrtinv": "CE + √inv weight", "ce_inv": "CE + inv weight",
              "cb_b0999": "Class-Balanced (β=0.999)", "cb_focal": "CB Focal (γ=2)", "la_t1": "Logit-adjusted (τ=1)",
-             "samp_q05": "Sampler q=0.5", "samp_q1": "Sampler q=1", "crt": "cRT (decoupling)"}
+             "samp_q05": "Sampler q=0.5", "samp_q1": "Sampler q=1", "crt": "cRT (decoupling)",
+             "lt": "3 head long-tail (loss riêng)"}
+TAG_ORDER_MOE = TAG_ORDER + ["lt"]
 METRICS = [name for _, name in LEADERBOARD_COLUMNS]
 
 
@@ -35,11 +39,16 @@ def collect(dirs) -> pd.DataFrame:
                 continue
             run = m.get("run", f.parent.name)
             folds = m.get("folds") or sorted(m.get("per_fold", {}))
-            row = {"run": run, "folds": "+".join(str(x) for x in folds),
+            row = {"run": run, "dir": str(f.parent), "folds": "+".join(str(x) for x in folds),
                    **{name: m["overall"][k] for k, name in LEADERBOARD_COLUMNS},
                    "Balanced Acc": m["overall"]["balanced_acc"]}
             if m.get("model", {}).get("inputs") == "metadata":
                 row.update(kind="ml", backbone=m["model"]["name"], tag="", views="metadata")
+            elif m.get("model", {}).get("name") == "moe":
+                parts = run.split("__")  # <backbone>__<hướng>__<tag>__<views>[__<hậu tố>]
+                backbone = parts[0] + (f" [{parts[4]}]" if len(parts) >= 5 else "")
+                row.update(kind="moe", backbone=backbone, arch=m["model"]["arch"], tag=m.get("tag") or "lt",
+                           views="+".join(m["model"].get("views", [])))
             else:
                 parts = run.split("__")  # <backbone>__<tag>__<views>[__<hậu tố>]
                 backbone = parts[0] if len(parts) >= 3 else m["model"].get("backbone")
@@ -70,6 +79,39 @@ def bold_max(t: pd.DataFrame) -> str:
     return out.to_markdown()
 
 
+def explain_section(g: pd.DataFrame) -> list[str]:
+    """Giải thích từ oof.csv của run MoE tốt nhất (clin+derm) mỗi loại fusion:
+    A/D: trọng số gate trung bình theo lớp thật; B/C: tỉ lệ expert top-1 của token CLS theo lớp thật."""
+    from milk10k import CLASSES
+
+    md = []
+    for kind, archs in (("gate", "AD"), ("expert", "BC")):
+        cand = g[g.arch.isin(list(archs)) & (g.views == "clin+derm")]
+        if cand.empty:
+            continue
+        best = cand.sort_values("Dice Coefficient", ascending=False).iloc[0]
+        oof_path = Path(best["dir"]) / "oof.csv"
+        if not oof_path.exists():
+            continue
+        oof = pd.read_csv(oof_path)
+        oof["class"] = [CLASSES[i] for i in oof.label]
+        if kind == "gate":
+            cols = [c for c in oof.columns if c.startswith("gate_")]
+            if not cols:
+                continue
+            t = oof.groupby("class")[cols].mean().reindex(CLASSES)
+            t.columns = [c.removeprefix("gate_") for c in cols]
+            title = f"Trọng số gate trung bình theo lớp — {best.run} (mô hình dựa vào nguồn nào)"
+        else:
+            if "expert_cls" not in oof.columns:
+                continue
+            t = pd.crosstab(oof["class"], oof["expert_cls"].astype(int), normalize="index").reindex(CLASSES) * 100
+            t.columns = [f"expert {c}" for c in t.columns]
+            title = f"Expert top-1 của token CLS theo lớp (%) — {best.run} (expert chuyên môn hoá thế nào)"
+        md += [f"### {title}", "", t.to_markdown(floatfmt=".2f" if kind == "gate" else ".1f"), ""]
+    return md
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dirs", nargs="+", default=["outputs"])
@@ -81,7 +123,7 @@ def main():
         return
     out = resolve_path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    df.sort_values(["kind", "backbone", "tag", "views"]).to_csv(out / "all_runs.csv", index=False)
+    df.drop(columns="dir").sort_values(["kind", "backbone", "tag", "views"]).to_csv(out / "all_runs.csv", index=False)
 
     md = ["# Kết quả MILK10k (val)", "",
           "Metric giống leaderboard ISIC: trung bình macro 11 lớp, ngưỡng > 0.5. Xếp hạng theo **Dice**.", ""]
@@ -111,6 +153,35 @@ def main():
         t.index.name = "model"
         t.to_csv(out / "ml_models.csv")
         md += ["## Mô hình ML trên metadata", "", t.to_markdown(floatfmt=".4f"), ""]
+
+    moe = df[df.kind == "moe"]
+    for bb, g in moe.groupby("backbone"):
+        g = g.assign(row=g.arch.map(ARCH_NAMES) + " — " + g.tag.map(TAG_NAMES).fillna(g.tag))
+        order = [f"{ARCH_NAMES[a]} — {TAG_NAMES.get(t, t)}" for a in ARCH_NAMES for t in TAG_ORDER_MOE]
+        t = pivot(g, "row", order)
+        t.to_csv(out / f"stage3_moe_{bb}.csv")
+        md += [f"## Stage 3 — Multimodal MoE ({bb}): Dice theo hướng × loss × nhánh ảnh", "", bold_max(t), ""]
+        ref = img[img.backbone == bb]
+        if not ref.empty:  # cùng backbone, cùng loss: chỉ ảnh (stage 2) vs từng hướng MoE
+            cmp = {}
+            for tag in sorted(set(g.tag) & set(ref.tag), key=TAG_ORDER_MOE.index):
+                for v in VIEW_ORDER:
+                    r = ref[(ref.tag == tag) & (ref.views == v)]
+                    if r.empty:
+                        continue
+                    row = {"Chỉ ảnh (stage 2)": r["Dice Coefficient"].iloc[0]}
+                    for a in ARCH_NAMES:
+                        x = g[(g.arch == a) & (g.tag == tag) & (g.views == v)]
+                        row[a] = x["Dice Coefficient"].iloc[0] if not x.empty else float("nan")
+                    cmp[f"{TAG_NAMES.get(tag, tag)} — {v}"] = row
+            if cmp:
+                c = pd.DataFrame(cmp).T
+                c.to_csv(out / f"stage3_vs_image_{bb}.csv")
+                md += [f"### MoE so với chỉ ảnh ({bb}, cùng loss)", "", c.to_markdown(floatfmt=".4f"), ""]
+        md += explain_section(g)
+    if not moe.empty:
+        best = moe.sort_values("Dice Coefficient", ascending=False).head(10)
+        md += ["## Top 10 run MoE theo Dice", "", best.set_index("run")[METRICS].to_markdown(floatfmt=".4f"), ""]
 
     if not img.empty:
         best = img.sort_values("Dice Coefficient", ascending=False).head(10)

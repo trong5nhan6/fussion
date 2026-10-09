@@ -63,10 +63,14 @@ def warmup_cosine(optimizer, warmup_steps: int, total_steps: int):
 
 
 @torch.no_grad()
-def predict(model, loader, device, tta=False, amp=False, max_batches=None):
-    """Trả về (lesion_ids, probs[N, C], labels hoặc None)."""
+def predict(model, loader, device, tta=False, amp=False, max_batches=None, explain=None):
+    """Trả về (lesion_ids, probs[N, C], labels hoặc None).
+
+    explain: dict rỗng -> được điền {tên: mảng [N]} từ model.last_explain (gate/expert của ảnh gốc, không lật).
+    """
     model.eval()
     ids, probs, labels = [], [], []
+    parts = {}
     for i, batch in enumerate(tqdm(loader, leave=False, desc="predict")):
         if max_batches and i >= max_batches:
             break
@@ -76,11 +80,19 @@ def predict(model, loader, device, tta=False, amp=False, max_batches=None):
             for dims in ([3], [2]):  # lật ngang, lật dọc
                 variants.append({**b, "images": {k: v.flip(dims) for k, v in b["images"].items()}})
         with torch.autocast(device_type=device.type, enabled=amp):
-            p = torch.stack([model(v).float().softmax(dim=1) for v in variants]).mean(0)
+            outs = []
+            for j, v in enumerate(variants):
+                outs.append(model(v).float().softmax(dim=1))
+                if j == 0 and explain is not None:
+                    for k, t in getattr(model, "last_explain", {}).items():
+                        parts.setdefault(k, []).append(t.float().cpu().numpy())
+            p = torch.stack(outs).mean(0)
         probs.append(p.cpu().numpy())
         ids.extend(batch["lesion_id"])
         if "label" in batch:
             labels.append(batch["label"].numpy())
+    if explain is not None:
+        explain.update({k: np.concatenate(v) for k, v in parts.items()})
     return ids, np.concatenate(probs), (np.concatenate(labels) if labels else None)
 
 
@@ -111,7 +123,8 @@ def _run_stage(*, model, tr_dl, va_dl, criterion, optimizer, epochs, warmup_epoc
             b = to_device(batch, device)
             with torch.autocast(device_type=device.type, enabled=use_amp):
                 logits = model(b)
-                loss = criterion(logits, b["label"])
+                loss = (model.compute_loss(logits, b["label"], criterion) if hasattr(model, "compute_loss")
+                        else criterion(logits, b["label"]))
             scaler.scale(loss / accum).backward()
             if (i + 1) % accum == 0 or i + 1 == steps_per_epoch:
                 scaler.unscale_(optimizer)
@@ -155,20 +168,23 @@ def _run_stage(*, model, tr_dl, va_dl, criterion, optimizer, epochs, warmup_epoc
     return history
 
 
-def _oof_frame(ids, probs, labels, fold) -> pd.DataFrame:
+def _oof_frame(ids, probs, labels, fold, explain=None) -> pd.DataFrame:
     oof = pd.DataFrame(probs, columns=CLASSES)
     oof.insert(0, "lesion_id", ids)
     oof.insert(1, "fold", fold)
     oof.insert(2, "label", labels)
+    for k, v in (explain or {}).items():  # vd gate_clin, gate_derm (A/D) hoặc expert_cls, expert_derm (B/C)
+        oof[k] = v
     return oof
 
 
 def _final_oof(model, ckpt_path, va_dl, cfg, device, use_amp, max_batches, fold):
     """Nạp checkpoint tốt nhất và dự đoán val (+TTA nếu bật)."""
     model.load_state_dict(torch.load(ckpt_path, map_location=device)["model"])
+    explain = {}
     ids, probs, labels = predict(model, va_dl, device, tta=cfg["predict"]["tta"], amp=use_amp,
-                                 max_batches=max_batches)
-    return _oof_frame(ids, probs, labels, fold)
+                                 max_batches=max_batches, explain=explain)
+    return _oof_frame(ids, probs, labels, fold, explain)
 
 
 def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
@@ -177,6 +193,16 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
     logger.info(f"FOLD {fold}")
     for line in model_report(model, cfg, meta_dim, device):
         logger.info(line)
+    if cfg["model"]["name"] == "moe":
+        e = cfg.get("moe", {})
+        arch = cfg["model"]["arch"]
+        desc = {"A": "gate theo nguồn", "B": "transformer + sparse MoE", "C": "B + 3 head long-tail",
+                "D": "A + 3 head long-tail"}[arch]
+        logger.info(f"MoE          : hướng {arch} ({desc}) | token: {getattr(model.tokens, 'modalities', '?')} | "
+                    f"d={e.get('d_model')} | aux_weight={e.get('aux_weight')} | modality_dropout={e.get('modality_dropout')}"
+                    + (f" | experts={e.get('n_experts')} top_k={e.get('top_k')} blocks={e.get('n_blocks')} "
+                       f"balance_alpha={e.get('balance_alpha')}" if arch in "BC" else "")
+                    + (f" | lt_taus={e.get('lt_taus')} (bỏ qua loss overlay)" if arch in "CD" else ""))
     logger.info(device_report(device))
     logger.info(f"Dữ liệu      : train {len(tr_df)} | val {len(va_df)} | img_size {cfg['data']['img_size']}")
     counts = pd.DataFrame({"train": tr_df.label.value_counts(), "val": va_df.label.value_counts()}) \
@@ -184,10 +210,14 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
     logger.info("Phân bố lớp  : " + ", ".join(f"{c}={t}/{v}" for c, (t, v) in zip(CLASSES, counts.values))
                 + "  (train/val)")
     w = class_weights(tr_df.label.to_numpy(), lc.get("class_weight"), lc.get("cb_beta", 0.999))
-    logger.info(f"Loss         : {lc['name']} | class_weight={lc.get('class_weight')}"
-                + (f" [{', '.join(f'{x:.2f}' for x in w.tolist())}]" if w is not None else "")
-                + (f" | tau={lc.get('la_tau')}" if lc["name"] == "logit_adjusted" else "")
-                + (f" | gamma={lc.get('focal_gamma')}" if lc["name"] == "focal" else ""))
+    if cfg["model"].get("arch") in ("C", "D"):
+        logger.info(f"Loss         : 3 head long-tail, logit-adjusted τ={cfg.get('moe', {}).get('lt_taus')} "
+                    f"(prior theo sampler_q={tc.get('sampler_q')}); head phụ: CE — cấu hình loss overlay không dùng")
+    else:
+        logger.info(f"Loss         : {lc['name']} | class_weight={lc.get('class_weight')}"
+                    + (f" [{', '.join(f'{x:.2f}' for x in w.tolist())}]" if w is not None else "")
+                    + (f" | tau={lc.get('la_tau')}" if lc["name"] == "logit_adjusted" else "")
+                    + (f" | gamma={lc.get('focal_gamma')}" if lc["name"] == "focal" else ""))
     logger.info(f"Huấn luyện   : epochs {tc['epochs']} | batch {tc['batch_size']} x accum {tc.get('accum_steps', 1)} "
                 f"| AdamW lr {tc['lr']} (backbone x{tc['backbone_lr_mult']}) wd {tc['weight_decay']} "
                 f"| warmup {tc['warmup_epochs']} | sampler_q {tc.get('sampler_q')} | amp {tc.get('amp')} "
@@ -210,6 +240,10 @@ def train_one_fold(cfg: dict, fold: int, df: pd.DataFrame, run_dir: Path, device
 
     meta_enc = MetadataEncoder().fit(tr_df)
     model = build_model(cfg, meta_enc.dim).to(device)
+    if hasattr(model, "set_class_prior"):  # prior lớp mà mô hình thực sự thấy khi train: P(c) ∝ n_c^(1-q)
+        q = tc.get("sampler_q") or 0.0
+        eff = np.maximum(class_counts(tr_labels), 1) ** (1.0 - float(q))
+        model.set_class_prior(torch.tensor(eff / eff.sum(), dtype=torch.float32, device=device))
     _log_setup(cfg, fold, model, meta_enc.dim, tr_df, va_df, device, logger)
     mean, std = model.normalization()
     img_dir = image_dir(cfg, "train")

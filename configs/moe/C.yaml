@@ -1,0 +1,3 @@
+# Hướng C — Như B + 3 head long-tail (logit-adjusted, τ = moe.lt_taus); bỏ qua loss overlay trừ sampler
+# Overlay: truyền SAU config backbone (configs/baselines/*). Tham số MoE: mục `moe` trong default.yaml.
+model: {name: moe, arch: C}

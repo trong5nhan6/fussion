@@ -1,0 +1,3 @@
+# Hướng A — Gate theo nguồn: expert riêng mỗi nguồn, gate theo mẫu trộn đặc trưng (1 head)
+# Overlay: truyền SAU config backbone (configs/baselines/*). Tham số MoE: mục `moe` trong default.yaml.
+model: {name: moe, arch: A}

@@ -1,0 +1,3 @@
+# Hướng B — Transformer + sparse MoE: attention giữa các token, MoE-FFN top-k (1 head)
+# Overlay: truyền SAU config backbone (configs/baselines/*). Tham số MoE: mục `moe` trong default.yaml.
+model: {name: moe, arch: B}

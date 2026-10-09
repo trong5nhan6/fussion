@@ -230,3 +230,80 @@ def test_grid_suffix_and_cli_override_priority():
     cfg = load_config([ROOT / c for c in jobs[0].configs], jobs[0].sets)
     assert cfg["train"]["batch_size"] == 4 and cfg["train"]["epochs"] == 30  # override notebook > riêng backbone
     assert "data.img_size" in run_grid.effective_table(jobs)
+
+
+# ---------------------------------------------------------------- multimodal MoE (A, B, C, D)
+from milk10k.models.moe import TokenEncoder  # noqa: E402
+
+
+def _moe(arch, views, extra=()):
+    cfg = load_config([ROOT / "configs/default.yaml", ROOT / f"configs/moe/{arch}.yaml"],
+                      ["model.pretrained=false", "model.backbone=resnet18", f"model.views=[{','.join(views)}]", *extra])
+    return cfg, build_model(cfg, 34)
+
+
+@pytest.mark.parametrize("arch", list("ABCD"))
+@pytest.mark.parametrize("views", [["clin"], ["derm"], ["clin", "derm"]], ids=["clin", "derm", "clin+derm"])
+def test_moe_forward_loss_backward(arch, views):
+    cfg, m = _moe(arch, views)
+    m.set_class_prior(torch.full((NUM_CLASSES,), 1 / NUM_CLASSES))
+    batch = {"images": {v: torch.randn(4, 3, 64, 64) for v in views}, "meta": torch.randn(4, 34)}
+    y = torch.tensor([0, 1, 6, 10])
+    m.train()
+    logits = m(batch)
+    assert logits.shape == (4, NUM_CLASSES)
+    loss = m.compute_loss(logits, y, build_loss(cfg, LABELS))
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert m.tokens.encoder.conv1.weight.grad is not None          # gradient tới backbone
+    m.eval()
+    p = m(batch).float().softmax(1)
+    assert torch.allclose(p.sum(1), torch.ones(4), atol=1e-5)
+    keys = set(m.last_explain)
+    n_tok = len(views) + 2
+    assert keys == ({f"gate_{t}" for t in [*views, "demo", "monet"]} if arch in "AD"
+                    else {f"expert_{t}" for t in ["cls", *views, "demo", "monet"]})
+    if arch in "AD":
+        g = torch.stack([m.last_explain[f"gate_{t}"] for t in [*views, "demo", "monet"]], 1)
+        assert g.shape == (4, n_tok) and torch.allclose(g.sum(1), torch.ones(4), atol=1e-5)
+
+
+def test_moe_longtail_heads_and_prior():
+    _, m = _moe("C", ["derm"], ["moe.lt_taus=[0.0,0.5,1.0]"])
+    assert len(m.head.heads) == 3 and m.head.taus == [0.0, 0.5, 1.0]
+    prior = torch.tensor([0.5] + [0.05] * 10)
+    m.set_class_prior(prior)
+    assert torch.allclose(m.head.log_prior.exp(), prior)
+    assert m.head_module() is m.head
+
+
+def test_modality_dropout_keeps_one_token():
+    enc = TokenEncoder("resnet18", ["clin", "derm"], False, 64, 32, False, modality_dropout=1.0, dropout=0.0)
+    enc.train()
+    x = enc({"images": {v: torch.randn(6, 3, 64, 64) for v in ("clin", "derm")}, "meta": torch.randn(6, 34)})
+    missing = enc.missing + enc.type_emb
+    is_missing = torch.isclose(x, missing.expand_as(x), atol=1e-6).all(-1)   # [6, 4]
+    assert (is_missing.sum(1) == 3).all()   # p=1: che hết, rồi giữ lại đúng 1 nguồn
+
+
+def test_moe_param_groups_split_backbone():
+    _, m = _moe("B", ["clin", "derm"], ["moe.fusion_lr_mult=2.0"])
+    g_enc, g_rest = m.param_groups(1e-4, 0.1)
+    assert g_enc["lr"] == pytest.approx(1e-5) and g_rest["lr"] == pytest.approx(2e-4)
+    n_all = sum(1 for _ in m.parameters())
+    assert len(list(g_enc["params"])) + len(g_rest["params"]) == n_all
+
+
+def test_stage3_grid_longtail_uses_only_sampler_overlays():
+    exp = _exp("stage3_moe.yaml")
+    jobs = run_grid.build_jobs(exp, "configs/env/kaggle_t4.yaml", ["vit_base"], suffix="",
+                               only_archs=["A", "C"], only_overlays=["ce_sqrt_inv", "sampler_q05"],
+                               only_views=["clin+derm"])
+    names = sorted(j.name for j in jobs)
+    assert names == sorted(["vit_base__A__ce_sqrtinv__clin+derm", "vit_base__A__samp_q05__clin+derm",
+                            "vit_base__C__lt__clin+derm", "vit_base__C__samp_q05__clin+derm"])
+    j = next(j for j in jobs if j.name == "vit_base__C__samp_q05__clin+derm")
+    cfg = load_config([ROOT / c for c in j.configs], j.sets)
+    assert cfg["model"]["name"] == "moe" and cfg["model"]["arch"] == "C" and cfg["train"]["sampler_q"] == 0.5
+    with pytest.raises(SystemExit):
+        run_grid.build_jobs(exp, None, only_archs=["E"])

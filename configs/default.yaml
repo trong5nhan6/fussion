@@ -25,6 +25,20 @@ model:
   dropout: 0.3
   grad_checkpointing: false  # true: giảm VRAM (~40-60%), train chậm hơn ~20-30%
 
+# Multimodal MoE (model.name: moe, chọn hướng bằng configs/moe/{A,B,C,D}.yaml)
+moe:
+  d_model: 256           # kích thước token chung
+  n_experts: 4           # B/C: số expert trong MoE-FFN
+  top_k: 2               # B/C: mỗi token qua top-k expert
+  n_blocks: 2            # B/C: số khối transformer
+  n_heads: 4             # B/C: số head attention
+  balance_alpha: 0.01    # B/C: trọng số load-balancing loss
+  aux_weight: 0.25       # trọng số loss phụ của head từng nguồn
+  modality_dropout: 0.15 # xác suất che mỗi nguồn khi train
+  lt_taus: [0.0, 0.5, 1.0]  # C/D: τ của 3 head long-tail
+  dropout: 0.1
+  fusion_lr_mult: 1.0    # lr của phần MoE mới khởi tạo = train.lr * hệ số này
+
 # Xử lý mất cân bằng — xem src/milk10k/losses.py và configs/imbalance/
 loss:
   name: ce               # ce | focal | logit_adjusted

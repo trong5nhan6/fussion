@@ -3,8 +3,8 @@
 Phân loại 11 lớp chẩn đoán cho mỗi lesion, dựa trên **ảnh lâm sàng + ảnh dermoscopy + metadata**
 (tuổi, giới, skin tone, vị trí, 14 điểm khái niệm MONET). Phân tích dữ liệu xem trong [`EDA/EDA_report.md`](EDA/EDA_report.md).
 
-> **Trạng thái:** đã có baseline chỉ dùng ảnh (CNN/Transformer), các phương pháp xử lý mất cân bằng và mô hình ML
-> trên metadata. Mô hình **multimodal fusion (ảnh + metadata)** đang được thiết kế.
+> **Trạng thái:** baseline chỉ dùng ảnh (CNN/Transformer), 9 phương pháp xử lý mất cân bằng, mô hình ML trên metadata,
+> và **multimodal MoE (ảnh + metadata)** với 4 hướng A/B/C/D.
 
 ## Chạy trên Kaggle (khuyến nghị)
 
@@ -15,7 +15,8 @@ Notebook tự clone repo, tải dữ liệu từ Google Drive và train trên **
 | [`01_baselines`](notebooks/01_baselines.ipynb) | ResNet-152, ConvNeXt-B, ViT-B/16, Swin-B × {clin, derm, clin+derm} | 12 | T4 x2 |
 | [`02_imbalance`](notebooks/02_imbalance.ipynb) | Backbone tốt nhất × 9 phương pháp imbalance × 3 nhánh ảnh | 27 / backbone | T4 x2 |
 | [`03_ml_models`](notebooks/03_ml_models.ipynb) | 9 mô hình ML trên metadata (LogReg, SVM, KNN, RF, ExtraTrees, HGB, LightGBM, XGBoost, CatBoost) | 9 | Không |
-| [`04_results`](notebooks/04_results.ipynb) | Gộp output 01–03 thành bảng báo cáo, file nộp tốt nhất, learning curve | — | Không |
+| [`04_results`](notebooks/04_results.ipynb) | Gộp output các notebook thành bảng báo cáo, file nộp tốt nhất, learning curve | — | Không |
+| [`05_multimodal_moe`](notebooks/05_multimodal_moe.ipynb) | Multimodal MoE: chọn hướng (A/B/C/D) × loss × backbone × nhánh ảnh | tuỳ chọn (mặc định 24) | T4 x2 |
 
 **Chuẩn bị một lần:**
 1. Nén thư mục dữ liệu: `cd datasets && zip -r ../MILK10k.zip MILK10k` (khoảng 360MB). Tải lên Google Drive,
@@ -46,10 +47,11 @@ python scripts/summarize.py                                          # -> output
 
 ```
 notebooks/                  # 01_baselines, 02_imbalance, 03_ml_models, 04_results (Kaggle)
-experiments/                # lưới thí nghiệm: stage1_baselines.yaml, stage2_imbalance.yaml
+experiments/                # lưới thí nghiệm: stage1_baselines, stage2_imbalance, stage3_moe
 splits/folds_5.csv          # 5-fold phân tầng (seed 42), cố định cho mọi máy
 configs/
   default.yaml              # cấu hình gốc, các file khác kế thừa bằng `base:`
+  moe/                      # A, B, C, D: overlay chọn hướng multimodal MoE
   baselines/                # CNN: resnet50, resnet152, efficientnet_b0, convnext_tiny, convnext_base
                             # Transformer: vit_small, vit_base, swin_tiny, swin_base
   imbalance/                # overlay xử lý mất cân bằng (chồng lên 1 baseline bất kỳ)
@@ -63,6 +65,7 @@ src/milk10k/
   models/
     __init__.py             # registry MODELS + build_model()
     image_baseline.py       # backbone timm dùng chung cho các view, nối đặc trưng -> linear
+    moe.py                  # multimodal MoE: TokenEncoder, gate theo nguồn, transformer + sparse MoE, head long-tail
   losses.py                 # CE / Focal có trọng số lớp
   metrics.py                # metric giống hệt cách chấm của ISIC (AUC, AP, Acc, Sens, Spec, Dice)
   inference.py              # suy luận test + kiểm tra định dạng file nộp
@@ -170,6 +173,27 @@ bash scripts/run_imbalance.sh configs/baselines/<backbone>.yaml      # chạy t�
 Tham số chỉnh qua `--set`, ví dụ `loss.la_tau=1.5`, `loss.cb_beta=0.9999`, `train.sampler_q=0.3`, `crt.epochs=5`.
 Run có cRT lưu thêm `fold*/oof_stage1.csv` (kết quả trước cRT) để so sánh trong cùng một lần chạy, và
 `predict.py` tự dùng `best_crt.pt`. Nếu vừa dùng sampler vừa reweight, log sẽ cảnh báo bù hai lần.
+
+## Multimodal MoE (`model.name: moe`)
+
+Mỗi lesion → token d = 256: ảnh clinical, ảnh dermoscopy (theo `model.views`), demographics + vị trí (20 chiều),
+MONET (14 chiều). Metadata luôn được dùng; encoder ảnh (timm) dùng chung cho 2 ảnh, kèm embedding phân biệt nguồn.
+
+| Hướng (`configs/moe/`) | Trộn token | Head |
+|---|---|---|
+| **A** | Gate theo nguồn: mỗi nguồn 1 expert MLP, gate theo từng lesion trộn đặc trưng | 1 |
+| **B** | Transformer: attention giữa [CLS + token], FFN thay bằng sparse MoE (4 expert, top-2, load-balancing) | 1 |
+| **C** | Như B | 3 head long-tail: logit-adjusted τ = 0 / 0.5 / 1, suy luận = trung bình xác suất |
+| **D** | Như A | 3 head long-tail |
+
+Chung: head phụ cho từng nguồn (`moe.aux_weight`), modality dropout (`moe.modality_dropout`), train end-to-end.
+C/D tự có loss → chỉ kết hợp với overlay sampler. `oof.csv` của run MoE có thêm cột `gate_*` (A/D) hoặc `expert_*`
+(B/C); `summarize.py` dùng chúng để in trọng số gate / expert theo lớp.
+
+```bash
+python scripts/train.py --config configs/baselines/vit_base.yaml configs/moe/B.yaml configs/imbalance/sampler_q05.yaml
+python scripts/run_grid.py experiments/stage3_moe.yaml --backbones vit_base --archs A,B,C,D     --overlays ce_sqrt_inv,sampler_q05 --views clin,derm,clin+derm --dry-run
+```
 
 ## Đánh giá — giống leaderboard ISIC MILK10k
 
