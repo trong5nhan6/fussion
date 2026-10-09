@@ -242,7 +242,7 @@ def _moe(arch, views, extra=()):
     return cfg, build_model(cfg, 34)
 
 
-@pytest.mark.parametrize("arch", list("ABCD"))
+@pytest.mark.parametrize("arch", list("ABCDE"))
 @pytest.mark.parametrize("views", [["clin"], ["derm"], ["clin", "derm"]], ids=["clin", "derm", "clin+derm"])
 def test_moe_forward_loss_backward(arch, views):
     cfg, m = _moe(arch, views)
@@ -261,8 +261,10 @@ def test_moe_forward_loss_backward(arch, views):
     assert torch.allclose(p.sum(1), torch.ones(4), atol=1e-5)
     keys = set(m.last_explain)
     n_tok = len(views) + 2
-    assert keys == ({f"gate_{t}" for t in [*views, "demo", "monet"]} if arch in "AD"
-                    else {f"expert_{t}" for t in ["cls", *views, "demo", "monet"]})
+    expected = {"A": {f"gate_{t}" for t in [*views, "demo", "monet"]},
+                "B": {f"expert_{t}" for t in ["cls", *views, "demo", "monet"]}, "E": set()}
+    expected.update(C=expected["B"], D=expected["A"])
+    assert keys == expected[arch]
     if arch in "AD":
         g = torch.stack([m.last_explain[f"gate_{t}"] for t in [*views, "demo", "monet"]], 1)
         assert g.shape == (4, n_tok) and torch.allclose(g.sum(1), torch.ones(4), atol=1e-5)
@@ -306,4 +308,14 @@ def test_stage3_grid_longtail_uses_only_sampler_overlays():
     cfg = load_config([ROOT / c for c in j.configs], j.sets)
     assert cfg["model"]["name"] == "moe" and cfg["model"]["arch"] == "C" and cfg["train"]["sampler_q"] == 0.5
     with pytest.raises(SystemExit):
-        run_grid.build_jobs(exp, None, only_archs=["E"])
+        run_grid.build_jobs(exp, None, only_archs=["F"])
+
+
+def test_moe_E_is_concat_with_longtail():
+    from milk10k.models.moe import ConcatFusion
+    _, m = _moe("E", ["clin", "derm"])
+    assert isinstance(m.fusion, ConcatFusion) and m.longtail and len(m.head.heads) == 3
+    assert m.fusion.aux_loss is None                                   # không có load-balancing
+    jobs = run_grid.build_jobs(_exp("stage3_moe.yaml"), None, ["vit_base"], only_archs=["E"],
+                               only_overlays=["ce_sqrt_inv", "sampler_q05"], only_views=["derm"])
+    assert sorted(j.name for j in jobs) == ["vit_base__E__lt__derm", "vit_base__E__samp_q05__derm"]

@@ -4,7 +4,7 @@ Phân loại 11 lớp chẩn đoán cho mỗi lesion, dựa trên **ảnh lâm s
 (tuổi, giới, skin tone, vị trí, 14 điểm khái niệm MONET). Phân tích dữ liệu xem trong [`EDA/EDA_report.md`](EDA/EDA_report.md).
 
 > **Trạng thái:** baseline chỉ dùng ảnh (CNN/Transformer), 9 phương pháp xử lý mất cân bằng, mô hình ML trên metadata,
-> và **multimodal MoE (ảnh + metadata)** với 4 hướng A/B/C/D.
+> và **multimodal MoE (ảnh + metadata)** với 5 hướng A–E.
 
 ## Chạy trên Kaggle (khuyến nghị)
 
@@ -16,7 +16,7 @@ Notebook tự clone repo, tải dữ liệu từ Google Drive và train trên **
 | [`02_imbalance`](notebooks/02_imbalance.ipynb) | Backbone tốt nhất × 9 phương pháp imbalance × 3 nhánh ảnh | 27 / backbone | T4 x2 |
 | [`03_ml_models`](notebooks/03_ml_models.ipynb) | 9 mô hình ML trên metadata (LogReg, SVM, KNN, RF, ExtraTrees, HGB, LightGBM, XGBoost, CatBoost) | 9 | Không |
 | [`04_results`](notebooks/04_results.ipynb) | Gộp output các notebook thành bảng báo cáo, file nộp tốt nhất, learning curve | — | Không |
-| [`05_multimodal_moe`](notebooks/05_multimodal_moe.ipynb) | Multimodal MoE: chọn hướng (A/B/C/D) × loss × backbone × nhánh ảnh | tuỳ chọn (mặc định 24) | T4 x2 |
+| [`05_multimodal_moe`](notebooks/05_multimodal_moe.ipynb) | Multimodal MoE: chọn hướng (A–E) × loss × backbone × nhánh ảnh | tuỳ chọn (mặc định 30) | T4 x2 |
 
 **Chuẩn bị một lần:**
 1. Nén thư mục dữ liệu: `cd datasets && zip -r ../MILK10k.zip MILK10k` (khoảng 360MB). Tải lên Google Drive,
@@ -51,7 +51,7 @@ experiments/                # lưới thí nghiệm: stage1_baselines, stage2_im
 splits/folds_5.csv          # 5-fold phân tầng (seed 42), cố định cho mọi máy
 configs/
   default.yaml              # cấu hình gốc, các file khác kế thừa bằng `base:`
-  moe/                      # A, B, C, D: overlay chọn hướng multimodal MoE
+  moe/                      # A–E: overlay chọn hướng multimodal MoE
   baselines/                # CNN: resnet50, resnet152, efficientnet_b0, convnext_tiny, convnext_base
                             # Transformer: vit_small, vit_base, swin_tiny, swin_base
   imbalance/                # overlay xử lý mất cân bằng (chồng lên 1 baseline bất kỳ)
@@ -185,14 +185,16 @@ MONET (14 chiều). Metadata luôn được dùng; encoder ảnh (timm) dùng ch
 | **B** | Transformer: attention giữa [CLS + token], FFN thay bằng sparse MoE (4 expert, top-2, load-balancing) | 1 |
 | **C** | Như B | 3 head long-tail: logit-adjusted τ = 0 / 0.5 / 1, suy luận = trung bình xác suất |
 | **D** | Như A | 3 head long-tail |
+| **E** | Không MoE: nối 4 token → MLP (đối chứng cho C, D) | 3 head long-tail |
 
 Chung: head phụ cho từng nguồn (`moe.aux_weight`), modality dropout (`moe.modality_dropout`), train end-to-end.
-C/D tự có loss → chỉ kết hợp với overlay sampler. `oof.csv` của run MoE có thêm cột `gate_*` (A/D) hoặc `expert_*`
+C/D/E tự có loss → chỉ kết hợp với overlay sampler. `oof.csv` của run MoE có thêm cột `gate_*` (A/D) hoặc `expert_*`
 (B/C); `summarize.py` dùng chúng để in trọng số gate / expert theo lớp.
 
 ```bash
 python scripts/train.py --config configs/baselines/vit_base.yaml configs/moe/B.yaml configs/imbalance/sampler_q05.yaml
-python scripts/run_grid.py experiments/stage3_moe.yaml --backbones vit_base --archs A,B,C,D     --overlays ce_sqrt_inv,sampler_q05 --views clin,derm,clin+derm --dry-run
+python scripts/run_grid.py experiments/stage3_moe.yaml --backbones vit_base --archs A,B,C,D,E \
+    --overlays ce_sqrt_inv,sampler_q05 --views clin,derm,clin+derm --dry-run
 ```
 
 ## Đánh giá — giống leaderboard ISIC MILK10k

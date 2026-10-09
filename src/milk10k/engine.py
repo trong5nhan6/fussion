@@ -21,6 +21,7 @@ from .data import MetadataEncoder, MilkDataset, build_transforms, image_dir
 from .losses import build_loss, class_counts, class_weights
 from .metrics import compute_metrics, leaderboard_table, summary_line
 from .models import build_model
+from .models.moe import LONGTAIL_ARCHS
 from .profiling import device_report, model_report, peak_memory_gb
 
 DEBUG_BATCHES = 3
@@ -197,12 +198,12 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
         e = cfg.get("moe", {})
         arch = cfg["model"]["arch"]
         desc = {"A": "gate theo nguồn", "B": "transformer + sparse MoE", "C": "B + 3 head long-tail",
-                "D": "A + 3 head long-tail"}[arch]
+                "D": "A + 3 head long-tail", "E": "nối 4 token + 3 head long-tail"}[arch]
         logger.info(f"MoE          : hướng {arch} ({desc}) | token: {getattr(model.tokens, 'modalities', '?')} | "
                     f"d={e.get('d_model')} | aux_weight={e.get('aux_weight')} | modality_dropout={e.get('modality_dropout')}"
                     + (f" | experts={e.get('n_experts')} top_k={e.get('top_k')} blocks={e.get('n_blocks')} "
                        f"balance_alpha={e.get('balance_alpha')}" if arch in "BC" else "")
-                    + (f" | lt_taus={e.get('lt_taus')} (bỏ qua loss overlay)" if arch in "CD" else ""))
+                    + (f" | lt_taus={e.get('lt_taus')} (bỏ qua loss overlay)" if arch in LONGTAIL_ARCHS else ""))
     logger.info(device_report(device))
     logger.info(f"Dữ liệu      : train {len(tr_df)} | val {len(va_df)} | img_size {cfg['data']['img_size']}")
     counts = pd.DataFrame({"train": tr_df.label.value_counts(), "val": va_df.label.value_counts()}) \
@@ -210,7 +211,7 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
     logger.info("Phân bố lớp  : " + ", ".join(f"{c}={t}/{v}" for c, (t, v) in zip(CLASSES, counts.values))
                 + "  (train/val)")
     w = class_weights(tr_df.label.to_numpy(), lc.get("class_weight"), lc.get("cb_beta", 0.999))
-    if cfg["model"].get("arch") in ("C", "D"):
+    if cfg["model"].get("name") == "moe" and cfg["model"].get("arch") in LONGTAIL_ARCHS:
         logger.info(f"Loss         : 3 head long-tail, logit-adjusted τ={cfg.get('moe', {}).get('lt_taus')} "
                     f"(prior theo sampler_q={tc.get('sampler_q')}); head phụ: CE — cấu hình loss overlay không dùng")
     else:

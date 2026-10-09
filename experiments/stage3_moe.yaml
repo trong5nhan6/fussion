@@ -1,6 +1,6 @@
 # Stage 3 — Multimodal MoE (ảnh + metadata): backbone x hướng x loss x nhánh ảnh, fold 0.
-# Chọn tổ hợp khi chạy: --backbones vit_base --archs A,B,C,D --overlays ce_sqrt_inv,sampler_q05 --views clin,derm,clin+derm
-# Hướng C, D (3 head long-tail) tự có loss riêng: chỉ giữ overlay sampler + 1 run không overlay (tag "lt").
+# Chọn tổ hợp khi chạy: --backbones vit_base --archs A,B,C,D,E --overlays ce_sqrt_inv,sampler_q05 --views clin,derm,clin+derm
+# Hướng C, D, E (3 head long-tail) tự có loss riêng: chỉ giữ overlay sampler + 1 run không overlay (tag "lt").
 # Tên run: <backbone>__<hướng>__<tag>__<nhánh ảnh>
 name: stage3_moe
 backbones:
@@ -15,6 +15,7 @@ archs:
   B: configs/moe/B.yaml
   C: configs/moe/C.yaml
   D: configs/moe/D.yaml
+  E: configs/moe/E.yaml
 overlays:
   - configs/imbalance/ce_plain.yaml
   - configs/imbalance/ce_sqrt_inv.yaml

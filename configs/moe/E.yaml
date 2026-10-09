@@ -1,0 +1,3 @@
+# Hướng E — Không MoE: nối 4 token -> MLP -> z, 3 head long-tail (τ = moe.lt_taus). Đối chứng cho C, D.
+# Bỏ qua loss overlay trừ sampler. Overlay: truyền SAU config backbone (configs/baselines/*).
+model: {name: moe, arch: E}

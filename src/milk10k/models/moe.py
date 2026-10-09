@@ -6,6 +6,7 @@ Bốn hướng (model.arch):
   B  transformer + sparse MoE: [CLS, token...] -> (attention -> MoE-FFN top-k) x n_blocks; z = CLS -> 1 head
   C  như B, 3 head long-tail (logit-adjusted với τ khác nhau), suy luận = trung bình xác suất 3 head
   D  như A, 3 head long-tail
+  E  không MoE: nối 4 token -> MLP -> z, 3 head long-tail (đối chứng cho C, D)
 Chung: head phụ cho từng token (deep supervision), modality dropout, load-balancing loss (B, C).
 """
 import math
@@ -19,7 +20,9 @@ from .image_baseline import check_views, create_encoder
 
 DEMO_DIM = 20   # tuổi(2) + giới(3) + skin tone(7) + vị trí(8), xem data/metadata.py
 MONET_DIM = 14  # 7 khái niệm x 2 ảnh
-ARCHS = {"A": ("gated", False), "B": ("transformer", False), "C": ("transformer", True), "D": ("gated", True)}
+ARCHS = {"A": ("gated", False), "B": ("transformer", False), "C": ("transformer", True), "D": ("gated", True),
+         "E": ("concat", True)}  # hướng -> (cách trộn token, có 3 head long-tail)
+LONGTAIL_ARCHS = [a for a, (_, lt) in ARCHS.items() if lt]
 
 
 def mlp(d_in, d_out, dropout=0.1):
@@ -76,6 +79,19 @@ class GatedFusion(nn.Module):
         g = self.gate(x.flatten(1)).float().softmax(dim=-1)   # [B, M]
         self.last_gate = g.detach()
         return self.norm((g.to(h.dtype)[..., None] * h).sum(dim=1))
+
+
+class ConcatFusion(nn.Module):
+    """Hướng E: trộn thông thường — nối mọi token rồi qua MLP (không gate, không expert)."""
+
+    def __init__(self, n_tokens, d, dropout):
+        super().__init__()
+        self.mlp = nn.Sequential(nn.Linear(n_tokens * d, d), nn.GELU(), nn.Dropout(dropout), nn.Linear(d, d))
+        self.norm = nn.LayerNorm(d)
+        self.aux_loss = None
+
+    def forward(self, x):                                 # x: [B, M, d]
+        return self.norm(self.mlp(x.flatten(1)))
 
 
 class MoEFFN(nn.Module):
@@ -163,8 +179,10 @@ class MultimodalMoE(nn.Module):
         self.tokens = TokenEncoder(backbone, views, pretrained, img_size, d_model, grad_checkpointing,
                                    modality_dropout, dropout)
         M = len(self.tokens.modalities)
-        self.fusion = (GatedFusion(M, d_model, dropout) if fusion == "gated" else
-                       TransformerMoEFusion(d_model, n_blocks, n_heads, n_experts, top_k, dropout))
+        self.fusion = {"gated": lambda: GatedFusion(M, d_model, dropout),
+                       "concat": lambda: ConcatFusion(M, d_model, dropout),
+                       "transformer": lambda: TransformerMoEFusion(d_model, n_blocks, n_heads, n_experts, top_k,
+                                                                   dropout)}[fusion]()
         self.head = (LongTailHeads(d_model, lt_taus, head_dropout, num_classes) if self.longtail else
                      nn.Sequential(nn.Dropout(head_dropout), nn.Linear(d_model, num_classes)))
         self.aux_heads = nn.ModuleList([nn.Linear(d_model, num_classes) for _ in range(M)])
@@ -207,7 +225,9 @@ class MultimodalMoE(nn.Module):
     def _record_explain(self):
         """Lưu thông tin giải thích của lần forward gần nhất (engine ghi vào oof.csv)."""
         mods = self.tokens.modalities
-        if isinstance(self.fusion, GatedFusion):
+        if isinstance(self.fusion, ConcatFusion):
+            self.last_explain = {}                        # E: nối thẳng, không có gate/expert để giải thích
+        elif isinstance(self.fusion, GatedFusion):
             g = self.fusion.last_gate
             self.last_explain = {f"gate_{m}": g[:, i] for i, m in enumerate(mods)}
         else:

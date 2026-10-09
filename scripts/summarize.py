@@ -20,7 +20,7 @@ from milk10k.utils import load_json, resolve_path
 
 VIEW_ORDER = ["clin", "derm", "clin+derm"]
 ARCH_NAMES = {"A": "A · gate theo nguồn", "B": "B · transformer MoE", "C": "C · B + long-tail",
-              "D": "D · A + long-tail"}
+              "D": "D · A + long-tail", "E": "E · nối 4 token + long-tail"}
 TAG_ORDER = ["ce_plain", "ce_sqrtinv", "ce_inv", "cb_b0999", "cb_focal", "la_t1", "samp_q05", "samp_q1", "crt"]
 TAG_NAMES = {"ce_plain": "CE", "ce_sqrtinv": "CE + √inv weight", "ce_inv": "CE + inv weight",
              "cb_b0999": "Class-Balanced (β=0.999)", "cb_focal": "CB Focal (γ=2)", "la_t1": "Logit-adjusted (τ=1)",
