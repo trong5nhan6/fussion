@@ -193,13 +193,14 @@ qua MLP 2 lớp (`model.mlp_hidden`, mặc định 512). `model.concat_meta: tru
 
 | Config | Giá trị | Ý nghĩa |
 |---|---|---|
-| `data.resize` | **`pad`** (mặc định) \| `squash` | Giữ tỉ lệ 4:3 + pad viền đen \| resize thẳng về vuông (dùng 100% điểm ảnh) — xem `EDA/figures/12_resize_comparison.png` |
-| `data.aug` | **`basic`** \| `strong` | Lật/affine/màu nhẹ \| RandomResizedCrop, xoay, màu, blur/nhiễu, affine, xoá vùng |
+| `data.resize` | **`squash`** (mặc định) \| `pad` | Resize thẳng về vuông (dùng 100% điểm ảnh) \| giữ tỉ lệ 4:3 + pad viền đen — xem `EDA/figures/12_resize_comparison.png` |
+| `data.aug` | **`strong`** (mặc định) \| `basic` | RandomResizedCrop, xoay, màu, blur/nhiễu, affine, xoá vùng \| lật/affine/màu nhẹ |
 | `model.drop_path_rate` | **0.0** | Stochastic depth của backbone |
 | `loss.name: bce` + `loss.pos_weight_clip` | 10 | Sigmoid độc lập từng lớp, pos_weight = n_âm/n_dương (chặn) — overlay `configs/imbalance/bce.yaml` |
 | `predict.postprocess` | **`auto`** \| `top1` \| `softmax` \| `sigmoid` | auto = sigmoid nếu loss bce (mỗi lớp tự so 0.5, cho phép nhiều lớp dương), ngược lại top1 |
 
 Overlay ablation trong `configs/ablation/` (R1–R5, `r5_nobce` cho MoE long-tail); lưới `experiments/stage4_ablation.yaml`.
+Các run trước ngày 10/10/2026 dùng mặc định cũ `pad` + `basic`; overlay R1–R4 ghi rõ resize/aug để vẫn so được với R0.
 BCE không dùng được với hướng long-tail C/D/E.
 
 ## Multimodal MoE (`model.name: moe`)

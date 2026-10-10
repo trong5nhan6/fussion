@@ -1,4 +1,4 @@
 # R3: mốc (sampler q=0.5) + augmentation mạnh.
 base: ../imbalance/sampler_q05.yaml
 tag: r3_aug
-data: {aug: strong}
+data: {resize: pad, aug: strong}

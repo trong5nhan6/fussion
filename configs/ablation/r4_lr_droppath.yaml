@@ -1,5 +1,6 @@
 # R4: mốc (sampler q=0.5) + fine-tune backbone mạnh hơn (lr backbone = lr) + drop path 0.1.
 base: ../imbalance/sampler_q05.yaml
 tag: r4_lr
+data: {resize: pad, aug: basic}   # giữ như R0
 train: {backbone_lr_mult: 1.0}
 model: {drop_path_rate: 0.1}

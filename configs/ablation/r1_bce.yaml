@@ -1,3 +1,4 @@
 # R1: chỉ đổi loss sang BCE + pos_weight (sigmoid). Mốc R0 = sampler q=0.5, softmax, pad, aug basic.
 base: ../imbalance/bce.yaml
 tag: r1_bce
+data: {resize: pad, aug: basic}   # giữ như R0 (mặc định chung giờ là squash + strong)

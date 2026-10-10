@@ -1,9 +1,9 @@
 """Tiền xử lý và augmentation ảnh.
 
-data.resize: pad    — resize giữ tỉ lệ 4:3 rồi pad thành vuông (mặc định; ảnh thật chiếm 75% khung)
-             squash — resize thẳng về vuông (dùng 100% điểm ảnh, ảnh bị kéo dọc nhẹ)
-data.aug:    basic  — lật, affine ±30°, ColorJitter nhẹ (mặc định)
-             strong — RandomResizedCrop, xoay, lật, màu, blur/nhiễu, affine, xoá vùng ngẫu nhiên
+data.resize: squash — resize thẳng về vuông (mặc định trong configs/default.yaml; dùng 100% điểm ảnh, kéo dọc nhẹ)
+             pad    — resize giữ tỉ lệ 4:3 rồi pad thành vuông (ảnh thật chiếm 75% khung)
+data.aug:    strong — RandomResizedCrop, xoay, lật, màu, blur/nhiễu, affine, xoá vùng ngẫu nhiên (mặc định)
+             basic  — lật, affine ±30°, ColorJitter nhẹ
 """
 import torch
 from torch import nn

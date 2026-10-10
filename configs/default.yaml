@@ -13,8 +13,8 @@ data:
   test_img_dir: test/MILK10k_Test_Input
   folds_csv: splits/folds_5.csv   # nằm trong repo (scripts/make_folds.py), để mọi máy dùng cùng cách chia
   img_size: 320          # kích thước ảnh vuông đưa vào mô hình
-  resize: pad            # pad: giữ tỉ lệ 4:3 + pad viền đen | squash: resize thẳng về vuông (dùng 100% điểm ảnh)
-  aug: basic             # basic: lật, affine, màu nhẹ | strong: RandomResizedCrop, xoay, màu, blur/nhiễu, xoá vùng
+  resize: squash         # squash: resize thẳng về vuông (dùng 100% điểm ảnh) | pad: giữ tỉ lệ 4:3 + pad viền đen
+  aug: strong            # strong: RandomResizedCrop, xoay, màu, blur/nhiễu, xoá vùng | basic: lật, affine, màu nhẹ
   num_workers: 4
 
 model:
