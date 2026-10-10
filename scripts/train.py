@@ -45,10 +45,26 @@ def main():
     logger.info(f"Run          : {run_name}")
     logger.info(f"Thư mục      : {run_dir}")
     logger.info(f"Config       : {' + '.join(args.config)}" + (f" | --set {' '.join(args.set)}" if args.set else ""))
-    logger.info(f"Folds        : {cfg['train']['folds']}" + (" | DEBUG" if cfg.get("debug") else ""))
+    logger.info(f"Folds        : {'FULL DATA (không val)' if cfg['train'].get('full_data') else cfg['train']['folds']}"
+                + (" | DEBUG" if cfg.get("debug") else ""))
 
     t0 = time.time()
     df = load_train_df(cfg)
+    if cfg["train"].get("full_data", False):
+        # Train trên toàn bộ 5.240 lesion, không val -> không có metric val; số epoch cố định (train.epochs)
+        seed_everything(cfg["seed"])
+        train_one_fold(cfg, None, df, run_dir, device, logger)
+        save_json({"run": run_name, "name": cfg["name"], "tag": cfg.get("tag", ""), "model": cfg["model"],
+                   "postprocess": mode, "folds": "full", "full_data": True, "epochs": cfg["train"]["epochs"],
+                   "overall": {}, "per_fold": {}}, run_dir / "metrics.json")
+        logger.info("=" * 100)
+        logger.info("full_data: không có val -> không có metric; chỉ sinh file nộp test")
+        predict_test(cfg, run_dir, device, tta=cfg["predict"]["tta"], logger=logger.info)
+        if not cfg.get("keep_checkpoints", True):
+            for ckpt in run_dir.glob("fold*/best*.pt"):
+                ckpt.unlink()
+        logger.info(f"Tổng thời gian: {(time.time() - t0) / 60:.1f} phút")
+        return
     oofs, per_fold = [], {}
     for fold in cfg["train"]["folds"]:
         seed_everything(cfg["seed"] + fold)

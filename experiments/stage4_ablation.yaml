@@ -5,6 +5,7 @@ name: stage4_ablation
 backbones:
   vit_base: configs/baselines/vit_base.yaml
   swin_base: configs/baselines/swin_base.yaml
+  dinov2_base: configs/baselines/dinov2_base.yaml
   convnext_base: configs/baselines/cnn_convnext_base.yaml
 overlays:
   - configs/ablation/r1_bce.yaml

@@ -148,6 +148,18 @@ def _run_stage(*, model, tr_dl, va_dl, criterion, optimizer, epochs, warmup_epoc
             pbar.set_postfix(loss=f"{loss_sum / seen:.4f}", acc=f"{correct / seen:.3f}")
         train_time = time.time() - t0
 
+        if va_dl is None:  # train.full_data: không có val -> không chọn checkpoint, không dừng sớm
+            row = {"epoch": epoch, "lr": optimizer.param_groups[-1]["lr"], "train_loss": loss_sum / seen,
+                   "train_acc": correct / seen, "time_s": time.time() - t0, "train_time_s": train_time}
+            mem = peak_memory_gb(device)
+            if mem is not None:
+                row["gpu_mem_gb"] = mem
+            history.append(row)
+            logger.info(f"[{prefix}] ep {epoch:02d} | lr {row['lr']:.2e} | train loss {row['train_loss']:.4f} "
+                        f"acc {row['train_acc']:.4f} | (không val) | {row['time_s']:.0f}s"
+                        + (f" {mem:.2f}GB" if mem is not None else ""))
+            continue
+
         _, va_probs, va_labels = predict(model, va_dl, device, amp=use_amp, max_batches=max_batches,
                                          activation=activation)
         m = compute_metrics(va_labels, va_probs, mode)
@@ -173,6 +185,10 @@ def _run_stage(*, model, tr_dl, va_dl, criterion, optimizer, epochs, warmup_epoc
         elif epoch - best_epoch >= patience:
             logger.info(f"[{prefix}] early stop tại epoch {epoch}")
             break
+    if va_dl is None:
+        torch.save({"model": model.state_dict(), "epoch": len(history) - 1, "score": None, **ckpt_extra}, ckpt_path)
+        logger.info(f"[{prefix}] full_data: lưu checkpoint epoch cuối ({len(history) - 1}) -> {ckpt_path.name}")
+        return history
     logger.info(f"[{prefix}] best epoch {best_epoch} | {monitor}={best:.4f}")
     return history
 
@@ -199,7 +215,7 @@ def _final_oof(model, ckpt_path, va_dl, cfg, device, use_amp, max_batches, fold)
 def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
     tc, lc = cfg["train"], cfg["loss"]
     logger.info("=" * 100)
-    logger.info(f"FOLD {fold}")
+    logger.info("FULL DATA — train trên toàn bộ dữ liệu, không có val" if fold is None else f"FOLD {fold}")
     for line in model_report(model, cfg, meta_dim, device):
         logger.info(line)
     if cfg["model"]["name"] == "moe":
@@ -235,7 +251,8 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
     logger.info(f"Huấn luyện   : epochs {tc['epochs']} | batch {tc['batch_size']} x accum {tc.get('accum_steps', 1)} "
                 f"| AdamW lr {tc['lr']} (backbone x{tc['backbone_lr_mult']}) wd {tc['weight_decay']} "
                 f"| warmup {tc['warmup_epochs']} | sampler_q {tc.get('sampler_q')} | amp {tc.get('amp')} "
-                f"| monitor {tc['monitor']} | patience {tc['patience']}")
+                + (f"| monitor {tc['monitor']} | patience {tc['patience']}" if fold is not None
+                   else "| full_data: không val, không early stop, dùng epoch cuối"))
     act = output_activation(cfg)
     loss_kind = "BCE" if act == "sigmoid" else "CE"
     logger.info(f"Đánh giá     : ngưỡng > 0.5 mỗi lớp, hậu xử lý={resolve_postprocess(cfg)} | xác suất={act} "
@@ -246,13 +263,18 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
     logger.info("-" * 100)
 
 
-def train_one_fold(cfg: dict, fold: int, df: pd.DataFrame, run_dir: Path, device, logger) -> pd.DataFrame:
+def train_one_fold(cfg: dict, fold, df: pd.DataFrame, run_dir: Path, device, logger) -> pd.DataFrame | None:
+    """fold = None: chế độ full_data (train trên toàn bộ df, không val) -> trả về None thay vì OOF."""
     tc = cfg["train"]
     mode = resolve_postprocess(cfg)
     activation = output_activation(cfg)
-    fold_dir = run_dir / f"fold{fold}"
+    full = fold is None
+    fold_dir = run_dir / ("fold_full" if full else f"fold{fold}")
     fold_dir.mkdir(parents=True, exist_ok=True)
-    tr_df, va_df = df[df.fold != fold].reset_index(drop=True), df[df.fold == fold].reset_index(drop=True)
+    if full:
+        tr_df, va_df = df.reset_index(drop=True), df.iloc[0:0]
+    else:
+        tr_df, va_df = df[df.fold != fold].reset_index(drop=True), df[df.fold == fold].reset_index(drop=True)
     tr_labels = tr_df.label.to_numpy()
 
     meta_enc = MetadataEncoder().fit(tr_df)
@@ -269,8 +291,10 @@ def train_one_fold(cfg: dict, fold: int, df: pd.DataFrame, run_dir: Path, device
     size = cfg["data"]["img_size"]
     views = cfg["model"]["views"]
     tr_ds = MilkDataset(tr_df, img_dir, views, transforms_from_cfg(cfg, True, mean, std), meta_enc.transform(tr_df))
-    va_ds = MilkDataset(va_df, img_dir, views, transforms_from_cfg(cfg, False, mean, std), meta_enc.transform(va_df))
-    va_dl = make_loader(va_ds, cfg, False)
+    va_dl = None
+    if not full:
+        va_ds = MilkDataset(va_df, img_dir, views, transforms_from_cfg(cfg, False, mean, std), meta_enc.transform(va_df))
+        va_dl = make_loader(va_ds, cfg, False)
 
     max_batches = DEBUG_BATCHES if cfg.get("debug") else None
     use_amp = tc.get("amp", False) and device.type == "cuda"
@@ -286,18 +310,19 @@ def train_one_fold(cfg: dict, fold: int, df: pd.DataFrame, run_dir: Path, device
                                     weight_decay=tc["weight_decay"]),
         epochs=tc["epochs"], warmup_epochs=tc["warmup_epochs"], accum=tc.get("accum_steps", 1),
         patience=tc["patience"], ckpt_path=best_path, ckpt_extra={"meta_encoder": meta_enc.state_dict()},
-        set_train_mode=model.train, prefix=f"fold{fold}")
+        set_train_mode=model.train, prefix="full" if full else f"fold{fold}")
     pd.DataFrame(history).to_csv(fold_dir / "history.csv", index=False)
-    oof = _final_oof(model, best_path, va_dl, cfg, device, use_amp, max_batches, fold)
+    oof = None if full else _final_oof(model, best_path, va_dl, cfg, device, use_amp, max_batches, fold)
 
     crt = cfg.get("crt", {})
     if not crt.get("enabled"):
         return oof
 
     # ---- Giai đoạn 2: cRT — đóng băng đặc trưng, train lại head với sampler cân bằng
-    oof.to_csv(fold_dir / "oof_stage1.csv", index=False)
-    m1 = compute_metrics(oof.label.to_numpy(), oof[CLASSES].to_numpy(), mode)
-    logger.info(f"[fold {fold}] giai đoạn 1 (trước cRT, TTA): {summary_line(m1)}")
+    if not full:
+        oof.to_csv(fold_dir / "oof_stage1.csv", index=False)
+        m1 = compute_metrics(oof.label.to_numpy(), oof[CLASSES].to_numpy(), mode)
+        logger.info(f"[fold {fold}] giai đoạn 1 (trước cRT, TTA): {summary_line(m1)}")
 
     head = model.head_module()
     model.requires_grad_(False)
@@ -322,9 +347,9 @@ def train_one_fold(cfg: dict, fold: int, df: pd.DataFrame, run_dir: Path, device
         epochs=crt.get("epochs", 10), warmup_epochs=0, accum=tc.get("accum_steps", 1),
         patience=crt.get("patience", crt.get("epochs", 10)), ckpt_path=crt_path,
         ckpt_extra={"meta_encoder": meta_enc.state_dict()}, set_train_mode=crt_train_mode,
-        prefix=f"fold{fold}-cRT")
+        prefix="full-cRT" if full else f"fold{fold}-cRT")
     pd.DataFrame(crt_history).to_csv(fold_dir / "history_crt.csv", index=False)
-    return _final_oof(model, crt_path, va_dl, cfg, device, use_amp, max_batches, fold)
+    return None if full else _final_oof(model, crt_path, va_dl, cfg, device, use_amp, max_batches, fold)
 
 
 def log_leaderboard(logger, title: str, m: dict) -> None:

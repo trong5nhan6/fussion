@@ -55,6 +55,7 @@ configs/
   moe/                      # A–E: overlay chọn hướng multimodal MoE
   baselines/                # CNN: resnet50, resnet152, efficientnet_b0, convnext_tiny, convnext_base
                             # Transformer: vit_small, vit_base, swin_tiny, swin_base
+                            # DINOv2-B (dinov2_base): CLS các ảnh nối lại -> MLP 2 lớp (model.name: concat_mlp)
   imbalance/                # overlay xử lý mất cân bằng (chồng lên 1 baseline bất kỳ)
   env/kaggle_t4.yaml        # profile Kaggle T4: batch 16, 2 worker/job, xoá checkpoint
 src/milk10k/
@@ -66,6 +67,7 @@ src/milk10k/
   models/
     __init__.py             # registry MODELS + build_model()
     image_baseline.py       # backbone timm dùng chung cho các view, nối đặc trưng -> linear
+    concat_mlp.py           # nối CLS các ảnh (+ metadata tuỳ chọn) -> MLP 2 lớp (dùng cho DINOv2)
     moe.py                  # multimodal MoE: TokenEncoder, gate theo nguồn, transformer + sparse MoE, head long-tail
   losses.py                 # CE / Focal có trọng số lớp
   metrics.py                # metric giống hệt cách chấm của ISIC (AUC, AP, Acc, Sens, Spec, Dice)
@@ -174,6 +176,18 @@ bash scripts/run_imbalance.sh configs/baselines/<backbone>.yaml      # chạy t�
 Tham số chỉnh qua `--set`, ví dụ `loss.la_tau=1.5`, `loss.cb_beta=0.9999`, `train.sampler_q=0.3`, `crt.epochs=5`.
 Run có cRT lưu thêm `fold*/oof_stage1.csv` (kết quả trước cRT) để so sánh trong cùng một lần chạy, và
 `predict.py` tự dùng `best_crt.pt`. Nếu vừa dùng sampler vừa reweight, log sẽ cảnh báo bù hai lần.
+
+## Train trên toàn bộ dữ liệu (`train.full_data: true`)
+
+Train trên cả 5.240 lesion, không chia val: không có metric val, không early stopping, dùng checkpoint epoch cuối rồi sinh
+file nộp test (thư mục `fold_full/`). Đặt `train.epochs` bằng số epoch tốt nhất đã thấy khi chạy có val và đặt
+`RUN_SUFFIX` (vd `full`) để không trùng tên run. `summarize.py` bỏ qua các run này (không có metric để so sánh).
+
+## DINOv2-Base (`configs/baselines/dinov2_base.yaml`)
+
+`vit_base_patch14_dinov2.lvd142m` (tự giám sát, LVD-142M). Mỗi ảnh lấy token CLS 768 chiều, nối lại (clin+derm = 1536),
+qua MLP 2 lớp (`model.mlp_hidden`, mặc định 512). `model.concat_meta: true` nối thêm 34 số metadata. Kích thước ảnh
+**không cố định 224**: trọng số gốc ở 518, dùng được mọi kích thước chia hết cho 14 (224, 336, 448, 518).
 
 ## Tuỳ chọn tiền xử lý, loss và quyết định (stage 4)
 

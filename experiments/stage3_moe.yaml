@@ -6,6 +6,7 @@ name: stage3_moe
 backbones:
   vit_base: configs/baselines/vit_base.yaml
   swin_base: configs/baselines/swin_base.yaml
+  dinov2_base: configs/baselines/dinov2_base.yaml   # concat CLS + MLP 2 lớp (với MoE: dùng làm backbone)
   convnext_base: configs/baselines/cnn_convnext_base.yaml
   resnet152:
     config: configs/baselines/cnn_resnet152.yaml

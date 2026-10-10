@@ -9,6 +9,7 @@ backbones:
   convnext_base: configs/baselines/cnn_convnext_base.yaml
   vit_base: configs/baselines/vit_base.yaml
   swin_base: configs/baselines/swin_base.yaml
+  dinov2_base: configs/baselines/dinov2_base.yaml   # concat CLS + MLP 2 lớp (với MoE: dùng làm backbone)
 overlays:
   - configs/imbalance/ce_plain.yaml
   - configs/imbalance/ce_sqrt_inv.yaml

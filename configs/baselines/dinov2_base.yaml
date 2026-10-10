@@ -1,0 +1,12 @@
+# DINOv2-Base/14 (86M, tự giám sát trên LVD-142M). Lấy token CLS (768) của từng ảnh, nối lại, qua MLP 2 lớp.
+# Kích thước ảnh phải chia hết cho 14: 224 (16x16 patch), 336, 448, 518 (độ phân giải gốc của trọng số).
+base: ../default.yaml
+name: dinov2_base
+data: {img_size: 224}
+model:
+  name: concat_mlp
+  backbone: vit_base_patch14_dinov2.lvd142m
+  mlp_hidden: 512        # số nơ-ron lớp ẩn của MLP 2 lớp
+  dropout: 0.3
+  concat_meta: false     # true: nối thêm 34 số metadata vào trước MLP
+train: {lr: 1.0e-4, backbone_lr_mult: 0.1, weight_decay: 5.0e-2}

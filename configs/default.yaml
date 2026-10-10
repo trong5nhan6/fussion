@@ -67,6 +67,9 @@ train:
   # Giai đoạn thử nghiệm: chỉ fold 0 (val = 1.048 lesion). Khi đã chọn được method,
   # chạy đủ 5 fold: --set train.folds=[0,1,2,3,4]
   folds: [0]
+  # true: train trên TOÀN BỘ dữ liệu (không chia val) để nộp bài. Không có metric val, không early stop,
+  # dùng checkpoint ở epoch cuối -> đặt train.epochs bằng số epoch tốt nhất đã thấy khi chạy có val.
+  full_data: false
 
 crt:                     # Classifier re-training sau giai đoạn 1 (Kang et al., 2020)
   enabled: false

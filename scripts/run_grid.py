@@ -219,10 +219,11 @@ class Grid:
         job.minutes = (time.time() - t0) / 60
         if proc.returncode == 0 and is_done(run_dir):
             job.status = "done"
-            job.dice = load_json(run_dir / "metrics.json")["overall"]["dice"]
+            job.dice = load_json(run_dir / "metrics.json")["overall"].get("dice")  # full_data: không có
             with self.lock:
                 self.durations.append(time.time() - t0)
-            self.say(f"[GPU {gpu}] XONG {job.name} | Dice={job.dice:.4f} | {job.minutes:.0f} phút")
+            dice = f"Dice={job.dice:.4f}" if job.dice is not None else "full_data (không val)"
+            self.say(f"[GPU {gpu}] XONG {job.name} | {dice} | {job.minutes:.0f} phút")
         else:
             job.status = "failed"
             tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
@@ -301,7 +302,8 @@ def main():
     print("\n" + "=" * 80)
     labels = {"done_before": "đã xong trước", "done": "xong", "failed": "LỖI", "not_started": "chưa chạy (hết giờ)"}
     for j in jobs:
-        extra = f" | Dice={j.dice:.4f} | {j.minutes:.0f} phút | GPU {j.gpu}" if j.status == "done" else ""
+        dice = f"Dice={j.dice:.4f}" if j.dice is not None else "không val"
+        extra = f" | {dice} | {j.minutes:.0f} phút | GPU {j.gpu}" if j.status == "done" else ""
         print(f"  {labels.get(j.status, j.status):<20} {j.name}{extra}")
     remaining = [j for j in jobs if j.status in ("failed", "not_started")]
     print(f"Tổng thời gian {(time.time() - start) / 3600:.2f} giờ. "

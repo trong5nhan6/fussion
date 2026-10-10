@@ -11,6 +11,7 @@ Tuỳ chọn (engine tự gọi nếu có):
   - set_class_prior(prior) -> nhận prior lớp hiệu dụng khi train
   - last_explain: dict tensor [B] (gate, expert) -> ghi vào oof.csv
 """
+from .concat_mlp import ConcatMLP
 from .image_baseline import ImageBaseline
 from .moe import MultimodalMoE
 
@@ -30,9 +31,18 @@ def _build_moe(cfg: dict, meta_dim: int):
                          head_dropout=m.get("dropout", 0.3), drop_path_rate=m.get("drop_path_rate", 0.0), **e)
 
 
+def _build_concat_mlp(cfg: dict, meta_dim: int):
+    m = cfg["model"]
+    return ConcatMLP(m["backbone"], m["views"], pretrained=m.get("pretrained", True), img_size=cfg["data"]["img_size"],
+                     grad_checkpointing=m.get("grad_checkpointing", False), drop_path_rate=m.get("drop_path_rate", 0.0),
+                     hidden=m.get("mlp_hidden", 512), dropout=m.get("dropout", 0.3),
+                     concat_meta=m.get("concat_meta", False), meta_dim=meta_dim)
+
+
 MODELS = {
     "image": _build_image,
-    "moe": _build_moe,      # multimodal MoE, hướng A/B/C/D (configs/moe/)
+    "moe": _build_moe,      # multimodal MoE, hướng A/B/C/D/E (configs/moe/)
+    "concat_mlp": _build_concat_mlp,  # nối CLS các ảnh (+ metadata tuỳ chọn) -> MLP 2 lớp
 }
 
 

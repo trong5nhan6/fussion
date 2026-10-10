@@ -393,3 +393,26 @@ def test_grid_skip_lt_base_and_inherited_sampler():
                                             "vit_base__D__r5_nobce__clin+derm"]
     jobs4 = run_grid.build_jobs(_exp("stage4_ablation.yaml"), None, ["vit_base"], only_views=["clin+derm"])
     assert [j.name.split("__")[1] for j in jobs4] == ["r1_bce", "r2_squash", "r3_aug", "r4_lr", "r5_all"]
+
+
+# ---------------------------------------------------------------- DINOv2 + concat MLP, full_data
+@pytest.mark.parametrize("concat_meta", [False, True])
+def test_concat_mlp_dinov2(concat_meta):
+    cfg = load_config(ROOT / "configs/baselines/dinov2_base.yaml",
+                      ["model.pretrained=false", f"model.concat_meta={str(concat_meta).lower()}"])
+    m = build_model(cfg, 34).eval()
+    assert m.encoder.num_features == 768 and m.uses_metadata == concat_meta
+    lin1, lin2 = [x for x in m.head if isinstance(x, torch.nn.Linear)]
+    assert lin1.in_features == 768 * 2 + (34 if concat_meta else 0) and lin2.out_features == NUM_CLASSES   # MLP 2 lớp
+    batch = {"images": {v: torch.randn(2, 3, 224, 224) for v in ("clin", "derm")}, "meta": torch.randn(2, 34)}
+    with torch.no_grad():
+        assert m(batch).shape == (2, NUM_CLASSES)
+
+
+def test_dinov2_img_size_multiple_of_14():
+    for size in (224, 336):
+        cfg = load_config(ROOT / "configs/baselines/dinov2_base.yaml",
+                          ["model.pretrained=false", f"data.img_size={size}", "model.views=[derm]"])
+        m = build_model(cfg).eval()
+        with torch.no_grad():
+            assert m({"images": {"derm": torch.randn(1, 3, size, size)}}).shape == (1, NUM_CLASSES)
