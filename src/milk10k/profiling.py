@@ -41,7 +41,11 @@ def model_report(model: nn.Module, cfg: dict, meta_dim: int, device) -> list[str
         f"Tham số      : tổng {fmt_num(total)} ({total:,}) | train được {fmt_num(trainable)}",
     ]
     for name, child in model.named_children():
-        lines.append(f"  - {name:<10}: {fmt_num(count_params(child)[0])}")
+        tot, tr = count_params(child)
+        lines.append(f"  - {name:<10}: {fmt_num(tot)}" + (f" (train được {fmt_num(tr)})" if tr != tot else ""))
+    if m.get("trainable_blocks") is not None:
+        lines.append(f"Fine-tune    : chỉ {m['trainable_blocks']} block/stage cuối của backbone + norm cuối "
+                     f"(phần còn lại đóng băng)")
     try:
         flops = count_flops(model, views, size, meta_dim, device)
         lines.append(f"Tính toán    : {flops / 1e9:.2f} GFLOPs / lesion ({flops / 2e9:.2f} GMACs), "

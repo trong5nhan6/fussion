@@ -39,11 +39,12 @@ class TokenEncoder(nn.Module):
     """
 
     def __init__(self, backbone, views, pretrained, img_size, d, grad_checkpointing, modality_dropout, dropout,
-                 drop_path_rate=0.0):
+                 drop_path_rate=0.0, trainable_blocks=None):
         super().__init__()
         self.views = check_views(views)
         self.modalities = self.views + ["demo", "monet"]
-        self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing, drop_path_rate)
+        self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing, drop_path_rate,
+                                      trainable_blocks)
         feat = self.encoder.num_features
         if d is None or d == feat:
             d = feat
@@ -183,14 +184,14 @@ class MultimodalMoE(nn.Module):
     def __init__(self, arch, backbone, views, pretrained=True, img_size=224, grad_checkpointing=False,
                  d_model=None, n_experts=4, top_k=2, n_blocks=2, n_heads=4, balance_alpha=0.01, aux_weight=0.25,
                  modality_dropout=0.15, lt_taus=(0.0, 0.5, 1.0), dropout=0.1, head_dropout=0.3,
-                 fusion_lr_mult=1.0, drop_path_rate=0.0, num_classes=NUM_CLASSES):
+                 fusion_lr_mult=1.0, drop_path_rate=0.0, trainable_blocks=None, num_classes=NUM_CLASSES):
         super().__init__()
         if arch not in ARCHS:
             raise ValueError(f"model.arch phải là một trong {list(ARCHS)}, nhận {arch!r}")
         self.arch = arch
         fusion, self.longtail = ARCHS[arch]
         self.tokens = TokenEncoder(backbone, views, pretrained, img_size, d_model, grad_checkpointing,
-                                   modality_dropout, dropout, drop_path_rate)
+                                   modality_dropout, dropout, drop_path_rate, trainable_blocks)
         M = len(self.tokens.modalities)
         d_model = self.tokens.d                           # = số chiều backbone khi không chiếu
         self.fusion = {"gated": lambda: GatedFusion(M, d_model, dropout),

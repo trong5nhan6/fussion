@@ -27,6 +27,8 @@ model:
   dropout: 0.3
   mlp_hidden: 512        # model image / concat_mlp: lớp ẩn của MLP 2 lớp sau khi nối đặc trưng các ảnh
   drop_path_rate: 0.0    # stochastic depth của backbone (0.1–0.2 giúp giảm overfit)
+  trainable_blocks: null # null: fine-tune toàn bộ backbone | N: chỉ N block cuối (ViT/DINOv2: 12 block;
+                         #   Swin/ConvNeXt/ResNet: 4 stage) + norm cuối, phần còn lại đóng băng
   grad_checkpointing: false  # true: giảm VRAM (~40-60%), train chậm hơn ~20-30%
 
 # Multimodal MoE (model.name: moe, chọn hướng bằng configs/moe/{A,B,C,D}.yaml)

@@ -188,6 +188,9 @@ file nộp test (thư mục `fold_full/`). Đặt `train.epochs` bằng số epo
 `vit_base_patch14_dinov2.lvd142m` (tự giám sát, LVD-142M). Mỗi ảnh lấy token CLS 768 chiều, nối lại (clin+derm = 1536),
 qua MLP 2 lớp (`model.mlp_hidden`, mặc định 512). `model.concat_meta: true` nối thêm 34 số metadata. Kích thước ảnh
 **không cố định 224**: trọng số gốc ở 518, dùng được mọi kích thước chia hết cho 14 (224, 336, 448, 518).
+`model.trainable_blocks` (mặc định **4** cho DINOv2): chỉ fine-tune N block cuối + norm cuối, đóng băng patch embedding,
+position embedding và các block đầu (`null` = fine-tune toàn bộ, `0` = chỉ train MLP). Dùng được cho mọi backbone
+(ViT/DINOv2 tính theo 12 block; Swin/ConvNeXt/ResNet theo 4 stage) và cho cả MoE.
 
 ## Tuỳ chọn tiền xử lý, loss và quyết định (stage 4)
 

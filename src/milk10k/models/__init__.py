@@ -21,14 +21,16 @@ def _build_image(cfg: dict, meta_dim: int):
     return ImageBaseline(m["backbone"], m["views"], pretrained=m.get("pretrained", True),
                          dropout=m.get("dropout", 0.3), img_size=cfg["data"]["img_size"],
                          grad_checkpointing=m.get("grad_checkpointing", False),
-                         drop_path_rate=m.get("drop_path_rate", 0.0), mlp_hidden=m.get("mlp_hidden", 512))
+                         drop_path_rate=m.get("drop_path_rate", 0.0), mlp_hidden=m.get("mlp_hidden", 512),
+                         trainable_blocks=m.get("trainable_blocks"))
 
 
 def _build_moe(cfg: dict, meta_dim: int):
     m, e = cfg["model"], cfg.get("moe", {})
     return MultimodalMoE(m["arch"], m["backbone"], m["views"], pretrained=m.get("pretrained", True),
                          img_size=cfg["data"]["img_size"], grad_checkpointing=m.get("grad_checkpointing", False),
-                         head_dropout=m.get("dropout", 0.3), drop_path_rate=m.get("drop_path_rate", 0.0), **e)
+                         head_dropout=m.get("dropout", 0.3), drop_path_rate=m.get("drop_path_rate", 0.0),
+                         trainable_blocks=m.get("trainable_blocks"), **e)
 
 
 def _build_concat_mlp(cfg: dict, meta_dim: int):
@@ -36,7 +38,8 @@ def _build_concat_mlp(cfg: dict, meta_dim: int):
     return ConcatMLP(m["backbone"], m["views"], pretrained=m.get("pretrained", True), img_size=cfg["data"]["img_size"],
                      grad_checkpointing=m.get("grad_checkpointing", False), drop_path_rate=m.get("drop_path_rate", 0.0),
                      hidden=m.get("mlp_hidden", 512), dropout=m.get("dropout", 0.3),
-                     concat_meta=m.get("concat_meta", False), meta_dim=meta_dim)
+                     concat_meta=m.get("concat_meta", False), meta_dim=meta_dim,
+                     trainable_blocks=m.get("trainable_blocks"))
 
 
 MODELS = {

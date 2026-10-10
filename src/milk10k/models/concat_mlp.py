@@ -15,10 +15,11 @@ from .image_baseline import check_views, create_encoder
 class ConcatMLP(nn.Module):
     def __init__(self, backbone: str, views, pretrained=True, img_size=224, grad_checkpointing=False,
                  drop_path_rate=0.0, hidden=512, dropout=0.3, concat_meta=False, meta_dim=0,
-                 num_classes=NUM_CLASSES):
+                 trainable_blocks=None, num_classes=NUM_CLASSES):
         super().__init__()
         self.views = check_views(views)
-        self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing, drop_path_rate)
+        self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing, drop_path_rate,
+                                      trainable_blocks)
         self.uses_metadata = bool(concat_meta)
         if self.uses_metadata and meta_dim <= 0:
             raise ValueError("model.concat_meta=true cần vector metadata (meta_dim > 0)")

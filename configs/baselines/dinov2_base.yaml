@@ -9,4 +9,5 @@ model:
   mlp_hidden: 512        # số nơ-ron lớp ẩn của MLP 2 lớp
   dropout: 0.3
   concat_meta: false     # true: nối thêm 34 số metadata vào trước MLP
+  trainable_blocks: 4    # chỉ fine-tune 4/12 block cuối (+ norm cuối); null = fine-tune toàn bộ
 train: {lr: 1.0e-4, backbone_lr_mult: 0.1, weight_decay: 5.0e-2}
