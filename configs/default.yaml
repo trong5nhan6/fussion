@@ -25,12 +25,14 @@ model:
   # Đổi nhanh từ CLI: --set model.views=[derm]
   views: [clin, derm]
   dropout: 0.3
+  mlp_hidden: 512        # model image / concat_mlp: lớp ẩn của MLP 2 lớp sau khi nối đặc trưng các ảnh
   drop_path_rate: 0.0    # stochastic depth của backbone (0.1–0.2 giúp giảm overfit)
   grad_checkpointing: false  # true: giảm VRAM (~40-60%), train chậm hơn ~20-30%
 
 # Multimodal MoE (model.name: moe, chọn hướng bằng configs/moe/{A,B,C,D}.yaml)
 moe:
-  d_model: 256           # kích thước token chung
+  d_model: null          # null: token ảnh = CLS của backbone, không chiếu (d = 768 ViT/DINOv2, 1024 Swin/ConvNeXt)
+                         # số nguyên (vd 256): chiếu đặc trưng ảnh về d chiều như phiên bản cũ
   n_experts: 4           # B/C: số expert trong MoE-FFN
   top_k: 2               # B/C: mỗi token qua top-k expert
   n_blocks: 2            # B/C: số khối transformer

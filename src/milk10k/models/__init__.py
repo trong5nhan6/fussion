@@ -21,7 +21,7 @@ def _build_image(cfg: dict, meta_dim: int):
     return ImageBaseline(m["backbone"], m["views"], pretrained=m.get("pretrained", True),
                          dropout=m.get("dropout", 0.3), img_size=cfg["data"]["img_size"],
                          grad_checkpointing=m.get("grad_checkpointing", False),
-                         drop_path_rate=m.get("drop_path_rate", 0.0))
+                         drop_path_rate=m.get("drop_path_rate", 0.0), mlp_hidden=m.get("mlp_hidden", 512))
 
 
 def _build_moe(cfg: dict, meta_dim: int):

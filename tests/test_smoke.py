@@ -82,7 +82,8 @@ def test_views_ablation_forward(views):
     batch = {"images": {v: torch.randn(2, 3, 64, 64) for v in ("clin", "derm")}}  # dư view vẫn chỉ dùng view đã chọn
     with torch.no_grad():
         assert model(batch).shape == (2, NUM_CLASSES)
-    assert model.head[1].in_features == model.encoder.num_features * len(views)
+    assert model.head[0].in_features == model.encoder.num_features * len(views)   # MLP 2 lớp: Linear đầu tiên
+    assert model.head[-1].out_features == NUM_CLASSES
 
 
 # ---------------------------------------------------------------- imbalance

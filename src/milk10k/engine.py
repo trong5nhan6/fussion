@@ -224,7 +224,7 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
         desc = {"A": "gate theo nguồn", "B": "transformer + sparse MoE", "C": "B + 3 head long-tail",
                 "D": "A + 3 head long-tail", "E": "nối 4 token + 3 head long-tail"}[arch]
         logger.info(f"MoE          : hướng {arch} ({desc}) | token: {getattr(model.tokens, 'modalities', '?')} | "
-                    f"d={e.get('d_model')} | aux_weight={e.get('aux_weight')} | modality_dropout={e.get('modality_dropout')}"
+                    f"d={model.tokens.d} ({'CLS backbone, không chiếu' if e.get('d_model') is None else 'chiếu'}) | aux_weight={e.get('aux_weight')} | modality_dropout={e.get('modality_dropout')}"
                     + (f" | experts={e.get('n_experts')} top_k={e.get('top_k')} blocks={e.get('n_blocks')} "
                        f"balance_alpha={e.get('balance_alpha')}" if arch in "BC" else "")
                     + (f" | lt_taus={e.get('lt_taus')} (bỏ qua loss overlay)" if arch in LONGTAIL_ARCHS else ""))

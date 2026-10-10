@@ -66,7 +66,7 @@ src/milk10k/
     transforms.py           # resize giữ tỉ lệ + pad vuông, augmentation cơ bản
   models/
     __init__.py             # registry MODELS + build_model()
-    image_baseline.py       # backbone timm dùng chung cho các view, nối đặc trưng -> linear
+    image_baseline.py       # backbone timm dùng chung cho các view, nối đặc trưng -> MLP 2 lớp
     concat_mlp.py           # nối CLS các ảnh (+ metadata tuỳ chọn) -> MLP 2 lớp (dùng cho DINOv2)
     moe.py                  # multimodal MoE: TokenEncoder, gate theo nguồn, transformer + sparse MoE, head long-tail
   losses.py                 # CE / Focal có trọng số lớp
@@ -204,8 +204,9 @@ BCE không dùng được với hướng long-tail C/D/E.
 
 ## Multimodal MoE (`model.name: moe`)
 
-Mỗi lesion → token d = 256: ảnh clinical, ảnh dermoscopy (theo `model.views`), demographics + vị trí (20 chiều),
-MONET (14 chiều). Metadata luôn được dùng; encoder ảnh (timm) dùng chung cho 2 ảnh, kèm embedding phân biệt nguồn.
+Mỗi lesion → các token: ảnh clinical, ảnh dermoscopy (theo `model.views`) là **CLS / đặc trưng gộp của backbone giữ
+nguyên, không chiếu** (d = 768 với ViT/DINOv2, 1024 với Swin/ConvNeXt; đặt `moe.d_model` = số nguyên để chiếu như cũ);
+demographics + vị trí (20 chiều) và MONET (14 chiều) được MLP đưa lên d. Metadata luôn được dùng; encoder ảnh (timm) dùng chung cho 2 ảnh, kèm embedding phân biệt nguồn.
 
 | Hướng (`configs/moe/`) | Trộn token | Head |
 |---|---|---|

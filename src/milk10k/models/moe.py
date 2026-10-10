@@ -1,6 +1,8 @@
 """Multimodal Mixture-of-Experts: ảnh clinical / dermoscopy + metadata (demographics, MONET).
 
 Mỗi lesion -> tối đa 4 token d chiều: [clin], [derm] (theo model.views), demo (20 chiều), monet (14 chiều).
+Mặc định token ảnh là CLS/đặc trưng gộp của backbone giữ NGUYÊN (không chiếu): d = số chiều backbone
+(768 ViT/DINOv2, 1024 Swin/ConvNeXt); 2 token metadata được MLP đưa lên d. Đặt moe.d_model = số nguyên để chiếu về d đó.
 Bốn hướng (model.arch):
   A  gate theo nguồn: expert riêng mỗi nguồn -> h_m; gate(mọi token) -> g; z = Σ g_m h_m      -> 1 head
   B  transformer + sparse MoE: [CLS, token...] -> (attention -> MoE-FFN top-k) x n_blocks; z = CLS -> 1 head
@@ -30,7 +32,11 @@ def mlp(d_in, d_out, dropout=0.1):
 
 
 class TokenEncoder(nn.Module):
-    """Ảnh (backbone timm dùng chung cho các view) + 2 MLP metadata -> tokens [B, M, d]."""
+    """Ảnh (backbone timm dùng chung cho các view) + 2 MLP metadata -> tokens [B, M, d].
+
+    d = None: token ảnh = đặc trưng backbone giữ nguyên (d = num_features, không chiếu).
+    d = số nguyên: chiếu đặc trưng ảnh về d chiều (Linear + LayerNorm).
+    """
 
     def __init__(self, backbone, views, pretrained, img_size, d, grad_checkpointing, modality_dropout, dropout,
                  drop_path_rate=0.0):
@@ -38,7 +44,13 @@ class TokenEncoder(nn.Module):
         self.views = check_views(views)
         self.modalities = self.views + ["demo", "monet"]
         self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing, drop_path_rate)
-        self.img_proj = nn.Sequential(nn.Linear(self.encoder.num_features, d), nn.LayerNorm(d))
+        feat = self.encoder.num_features
+        if d is None or d == feat:
+            d = feat
+            self.img_proj = nn.Identity()                 # dùng thẳng CLS / đặc trưng gộp của backbone
+        else:
+            self.img_proj = nn.Sequential(nn.Linear(feat, d), nn.LayerNorm(d))
+        self.d = d
         self.demo = nn.Sequential(mlp(DEMO_DIM, d, dropout), nn.LayerNorm(d))
         self.monet = nn.Sequential(mlp(MONET_DIM, d, dropout), nn.LayerNorm(d))
         M = len(self.modalities)
@@ -169,7 +181,7 @@ class MultimodalMoE(nn.Module):
     uses_metadata = True
 
     def __init__(self, arch, backbone, views, pretrained=True, img_size=224, grad_checkpointing=False,
-                 d_model=256, n_experts=4, top_k=2, n_blocks=2, n_heads=4, balance_alpha=0.01, aux_weight=0.25,
+                 d_model=None, n_experts=4, top_k=2, n_blocks=2, n_heads=4, balance_alpha=0.01, aux_weight=0.25,
                  modality_dropout=0.15, lt_taus=(0.0, 0.5, 1.0), dropout=0.1, head_dropout=0.3,
                  fusion_lr_mult=1.0, drop_path_rate=0.0, num_classes=NUM_CLASSES):
         super().__init__()
@@ -180,6 +192,7 @@ class MultimodalMoE(nn.Module):
         self.tokens = TokenEncoder(backbone, views, pretrained, img_size, d_model, grad_checkpointing,
                                    modality_dropout, dropout, drop_path_rate)
         M = len(self.tokens.modalities)
+        d_model = self.tokens.d                           # = số chiều backbone khi không chiếu
         self.fusion = {"gated": lambda: GatedFusion(M, d_model, dropout),
                        "concat": lambda: ConcatFusion(M, d_model, dropout),
                        "transformer": lambda: TransformerMoEFusion(d_model, n_blocks, n_heads, n_experts, top_k,

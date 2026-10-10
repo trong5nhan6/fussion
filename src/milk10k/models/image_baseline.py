@@ -1,5 +1,5 @@
 """Baseline chỉ dùng ảnh: một backbone timm (CNN hoặc Transformer) dùng chung cho các view,
-nối đặc trưng các view rồi đưa qua một lớp tuyến tính."""
+nối đặc trưng các view rồi đưa qua MLP 2 lớp (Linear -> GELU -> Dropout -> Linear)."""
 import timm
 import torch
 from torch import nn
@@ -33,13 +33,13 @@ def create_encoder(backbone: str, pretrained: bool, img_size: int, grad_checkpoi
 
 class ImageBaseline(nn.Module):
     def __init__(self, backbone: str, views, pretrained=True, dropout=0.3, img_size=224,
-                 grad_checkpointing=False, drop_path_rate=0.0, num_classes=NUM_CLASSES):
+                 grad_checkpointing=False, drop_path_rate=0.0, mlp_hidden=512, num_classes=NUM_CLASSES):
         super().__init__()
         self.views = check_views(views)
         self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing, drop_path_rate)
-        self.head = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(self.encoder.num_features * len(self.views), num_classes),
+        self.head = nn.Sequential(                       # MLP 2 lớp trên đặc trưng đã nối
+            nn.Linear(self.encoder.num_features * len(self.views), mlp_hidden), nn.GELU(), nn.Dropout(dropout),
+            nn.Linear(mlp_hidden, num_classes),
         )
 
     def forward(self, batch: dict) -> torch.Tensor:
