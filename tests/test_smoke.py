@@ -192,7 +192,7 @@ def _exp(name):
 
 def test_stage1_grid_order_and_names():
     jobs = run_grid.build_jobs(_exp("stage1_baselines.yaml"), "configs/env/kaggle_t4.yaml")
-    assert len(jobs) == 12
+    assert len(jobs) == 15   # 5 backbone (thêm dinov2_base) x 3 nhánh ảnh
     # mỗi backbone: clin -> derm -> clin+derm
     assert [j.name for j in jobs[:3]] == ["resnet152__ce_sqrtinv__clin", "resnet152__ce_sqrtinv__derm",
                                           "resnet152__ce_sqrtinv__clin+derm"]
