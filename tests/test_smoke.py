@@ -419,13 +419,14 @@ def test_dinov2_img_size_multiple_of_14():
             assert m({"images": {"derm": torch.randn(1, 3, size, size)}}).shape == (1, NUM_CLASSES)
 
 
-@pytest.mark.parametrize("n", [None, 0, 4])
+@pytest.mark.parametrize("n", [None, 0, 4, 12])
 def test_dinov2_trainable_blocks(n):
     v = "null" if n is None else n
     cfg = load_config(ROOT / "configs/baselines/dinov2_base.yaml", ["model.pretrained=false", f"model.trainable_blocks={v}"])
     e = build_model(cfg).encoder
     trainable = [any(p.requires_grad for p in b.parameters()) for b in e.blocks]
-    if n is None:
+    if n is None or n == 12:                        # 12/12 block = fine-tune toàn bộ, kể cả patch embed
+        assert all(p.requires_grad for p in e.parameters())
         assert all(trainable) and all(p.requires_grad for p in e.patch_embed.parameters())
     else:
         assert trainable == [False] * (12 - n) + [True] * n

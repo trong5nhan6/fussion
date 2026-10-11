@@ -30,11 +30,14 @@ def backbone_blocks(enc: nn.Module) -> list:
 
 
 def freeze_except_last_blocks(enc: nn.Module, n: int | None) -> None:
-    """n = None: train toàn bộ backbone. n >= 0: đóng băng tất cả (patch embed, pos embed, CLS/register, các block
-    đầu), chỉ train n block cuối + lớp norm cuối. n = 0: chỉ train norm cuối (gần như linear probe)."""
+    """n = None hoặc n >= số block (ViT/DINOv2 12, Swin/ConvNeXt/ResNet 4): train toàn bộ backbone.
+    0 <= n < số block: đóng băng tất cả (patch embed, pos embed, CLS/register, các block đầu), chỉ train n block cuối
+    + lớp norm cuối. n = 0: chỉ train norm cuối (gần như linear probe)."""
     if n is None:
         return
     blocks = backbone_blocks(enc)
+    if int(n) >= len(blocks):                       # vd DINOv2 12/12 -> fine-tune toàn bộ, kể cả patch/pos embed
+        return
     enc.requires_grad_(False)
     for b in blocks[max(0, len(blocks) - int(n)):] if n > 0 else []:
         b.requires_grad_(True)
