@@ -1,0 +1,31 @@
+# Stage 5 — Độ phân giải cao: công thức của run tốt nhất vit_base__D__r5_nobce__clin+derm (test 0.479)
+# (MoE hướng D, d_model 256, sampler q0.5 + squash + aug mạnh + fine-tune toàn bộ + drop path 0.1), ảnh 384.
+#   vit_base_384      : ViT-B/16 pretrain sẵn ở 384 (augreg in21k -> in1k)
+#   swin_base_384     : Swin-B pretrain sẵn ở 384 (cửa sổ 12, in22k -> in1k)
+#   vit_base_224to384 : đúng backbone của run 0.479 (augreg2, pretrain 224), position embedding nội suy lên 384
+# Tên run: <backbone>__<hướng>__<tag>__<nhánh ảnh>
+name: stage5_hires
+backbones:
+  vit_base_384: configs/baselines/vit_base_384.yaml
+  swin_base_384: configs/baselines/swin_base_384.yaml
+  vit_base_224to384:
+    config: configs/baselines/vit_base.yaml
+    set: [name=vit_base_224to384, data.img_size=384]
+archs:
+  A: configs/moe/A.yaml
+  B: configs/moe/B.yaml
+  C: configs/moe/C.yaml
+  D: configs/moe/D.yaml
+  E: configs/moe/E.yaml
+overlays:
+  - configs/imbalance/ce_sqrt_inv.yaml
+  - configs/imbalance/sampler_q05.yaml
+  - configs/ablation/r5_all.yaml     # A, B (BCE + squash + aug mạnh + lr + drop path)
+  - configs/ablation/r5_nobce.yaml   # C, D, E (sampler q0.5 + squash + aug mạnh + lr + drop path)
+views:
+  - [clin]
+  - [derm]
+  - [clin, derm]
+# Như run 0.479: chiếu CLS về 256. 384 trên T4: batch 8 x accum 8 (hiệu dụng 64) + grad checkpointing
+# (ghi đè configs/env/kaggle_t4.yaml: 16 x 2, checkpointing tắt)
+set: [moe.d_model=256, train.batch_size=8, train.accum_steps=8, model.grad_checkpointing=true]

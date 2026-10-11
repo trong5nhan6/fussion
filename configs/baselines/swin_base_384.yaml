@@ -1,0 +1,7 @@
+# Swin-Base pretrain ở 384 (cửa sổ 12x12, ImageNet-22k -> fine-tune 1k), 88M tham số. Cùng công thức pretrain với
+# swin_base (224, cửa sổ 7). Không nội suy được bản 224 lên 384 vì kích thước cửa sổ khác -> dùng thẳng checkpoint 384.
+base: ../default.yaml
+name: swin_base_384
+data: {img_size: 384}
+model: {backbone: swin_base_patch4_window12_384.ms_in22k_ft_in1k, grad_checkpointing: true, dropout: 0.4}
+train: {batch_size: 8, accum_steps: 8, lr: 5.0e-5, backbone_lr_mult: 0.2, weight_decay: 5.0e-2}

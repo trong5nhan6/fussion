@@ -1,0 +1,7 @@
+# ViT-Base/16 pretrain ở 384 (augreg, ImageNet-21k -> fine-tune 1k), 86M tham số.
+# 384/16 = 24x24 = 576 patch mỗi ảnh (gấp ~3 lần bản 224) -> chậm hơn ~3 lần, cần grad checkpointing trên T4.
+base: ../default.yaml
+name: vit_base_384
+data: {img_size: 384}
+model: {backbone: vit_base_patch16_384.augreg_in21k_ft_in1k, grad_checkpointing: true, dropout: 0.4}
+train: {batch_size: 8, accum_steps: 8, lr: 5.0e-5, backbone_lr_mult: 0.2, weight_decay: 5.0e-2}
