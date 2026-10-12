@@ -1,0 +1,7 @@
+# EfficientNetV2-L (Tan & Le 2021), trọng số gốc Google: pretrain ImageNet-21k -> fine-tune 1k.
+# Train gốc ở 384, test ở 480; dùng 384 để so sánh với ViT/Swin-384. CNN có BatchNorm (batch nhỏ -> thống kê nhiễu).
+base: ../default.yaml
+name: efficientnetv2_l
+data: {img_size: 384}
+model: {backbone: tf_efficientnetv2_l.in21k_ft_in1k, grad_checkpointing: true, dropout: 0.4, drop_path_rate: 0.2}
+train: {batch_size: 8, accum_steps: 8, lr: 1.0e-4, backbone_lr_mult: 0.1, weight_decay: 5.0e-2}

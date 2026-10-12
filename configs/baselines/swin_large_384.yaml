@@ -1,0 +1,7 @@
+# Swin-Large pretrain ở 384 (cửa sổ 12x12, ImageNet-22k -> fine-tune 1k), ~197M tham số, đặc trưng 1536 chiều.
+# Cùng công thức pretrain với swin_base_384, lớn hơn ~2.2 lần -> batch 4 x accum 16 trên T4.
+base: ../default.yaml
+name: swin_large_384
+data: {img_size: 384}
+model: {backbone: swin_large_patch4_window12_384.ms_in22k_ft_in1k, grad_checkpointing: true, dropout: 0.4}
+train: {batch_size: 4, accum_steps: 16, lr: 5.0e-5, backbone_lr_mult: 0.2, weight_decay: 5.0e-2}

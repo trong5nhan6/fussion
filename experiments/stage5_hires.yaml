@@ -2,12 +2,25 @@
 # (MoE hướng D, d_model 256, sampler q0.5 + squash + aug mạnh + fine-tune toàn bộ + drop path 0.1), ảnh 384.
 #   vit_base_384      : ViT-B/16 pretrain sẵn ở 384 (augreg in21k -> in1k)
 #   swin_base_384     : Swin-B pretrain sẵn ở 384 (cửa sổ 12, in22k -> in1k)
+#   swin_large_384    : Swin-L pretrain sẵn ở 384 (~197M), nặng -> batch 4 x accum 16
+#   efficientnetv2_m  : EfficientNetV2-M (53M, in21k -> in1k), CNN; lr 1e-4, drop path 0.2
+#   efficientnetv2_l  : EfficientNetV2-L (117M, in21k -> in1k), CNN; nặng nhất -> batch 4 x accum 16
 #   vit_base_224to384 : đúng backbone của run 0.479 (augreg2, pretrain 224), position embedding nội suy lên 384
 # Tên run: <backbone>__<hướng>__<tag>__<nhánh ảnh>
 name: stage5_hires
 backbones:
   vit_base_384: configs/baselines/vit_base_384.yaml
   swin_base_384: configs/baselines/swin_base_384.yaml
+  swin_large_384:
+    config: configs/baselines/swin_large_384.yaml
+    set: [train.batch_size=4, train.accum_steps=16]
+  # CNN: lr 1e-4 (ViT/Swin 5e-5) và drop path 0.2 (mặc định khi train EfficientNetV2, ghi đè 0.1 của r5_nobce)
+  efficientnetv2_m:
+    config: configs/baselines/efficientnetv2_m.yaml
+    set: [train.lr=1.0e-4, model.drop_path_rate=0.2]
+  efficientnetv2_l:
+    config: configs/baselines/efficientnetv2_l.yaml
+    set: [train.lr=1.0e-4, model.drop_path_rate=0.2, train.batch_size=4, train.accum_steps=16]
   vit_base_224to384:
     config: configs/baselines/vit_base.yaml
     set: [name=vit_base_224to384, data.img_size=384]
