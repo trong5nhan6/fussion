@@ -17,7 +17,7 @@ import torch
 from milk10k import CLASSES
 from milk10k.config import load_config, save_config
 from milk10k.data import load_train_df
-from milk10k.engine import log_leaderboard, train_one_fold
+from milk10k.engine import log_leaderboard, set_amp_dtype, train_one_fold
 from milk10k.inference import predict_test
 from milk10k.metrics import SUMMARY_KEYS, compute_metrics, resolve_postprocess
 from milk10k.utils import get_device, get_logger, resolve_path, save_json, seed_everything
@@ -41,6 +41,10 @@ def main():
     logger = get_logger(run_dir / "train.log")
     device = get_device()
     torch.backends.cudnn.benchmark = True  # kích thước ảnh cố định -> cuDNN chọn thuật toán nhanh nhất
+    # Ampere trở lên (A100): phép nhân ma trận fp32 còn lại chạy TF32 -> nhanh hơn nhiều, sai số không đáng kể
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    set_amp_dtype(cfg["train"].get("amp_dtype", "fp16"))
     mode = resolve_postprocess(cfg)
     logger.info(f"Run          : {run_name}")
     logger.info(f"Thư mục      : {run_dir}")

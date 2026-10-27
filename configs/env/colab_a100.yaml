@@ -1,0 +1,13 @@
+# Profile cho Google Colab A100 (40GB hoặc 80GB VRAM, ~12 vCPU). Truyền SAU baseline và overlay.
+# Notebook 08_ablation_colab đặt thêm batch / số job song song theo VRAM thực tế.
+data:
+  num_workers: 10           # ảnh MILK10k nhỏ (600x450) -> CPU đủ nhanh; chia đôi khi chạy 2 job cùng GPU
+  prefetch_factor: 4
+model:
+  grad_checkpointing: false # đủ VRAM -> không tính lại activation, nhanh hơn ~25%
+train:
+  batch_size: 16            # 16 lesion = 32 ảnh 384px mỗi bước; batch hiệu dụng 16 x 4 = 64 như mọi run
+  accum_steps: 4
+  amp: true
+  amp_dtype: bf16           # A100: bf16 + TF32 (train.py tự bật TF32)
+keep_checkpoints: false     # xoá checkpoint sau khi sinh file nộp (Drive có dung lượng giới hạn)

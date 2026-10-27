@@ -46,11 +46,21 @@ def make_sampler(labels: np.ndarray, q) -> WeightedRandomSampler | None:
     return WeightedRandomSampler(torch.as_tensor(w, dtype=torch.double), num_samples=len(labels))
 
 
+# Kiểu số của autocast: fp16 (T4, mặc định) | bf16 (A100/H100: không cần GradScaler). train.py đặt theo train.amp_dtype.
+AMP_DTYPE = torch.float16
+
+
+def set_amp_dtype(name: str | None) -> None:
+    global AMP_DTYPE
+    AMP_DTYPE = torch.bfloat16 if str(name).lower() in ("bf16", "bfloat16") else torch.float16
+
+
 def make_loader(ds, cfg, train: bool, sampler=None):
+    workers = 0 if cfg.get("debug") else cfg["data"]["num_workers"]
+    extra = {"persistent_workers": True, "prefetch_factor": cfg["data"].get("prefetch_factor", 2)} if workers else {}
     return DataLoader(
         ds, batch_size=cfg["train"]["batch_size"], shuffle=train and sampler is None, sampler=sampler,
-        num_workers=0 if cfg.get("debug") else cfg["data"]["num_workers"],
-        pin_memory=torch.cuda.is_available(), drop_last=train, persistent_workers=False,
+        num_workers=workers, pin_memory=torch.cuda.is_available(), drop_last=train, **extra,
     )
 
 
@@ -82,7 +92,7 @@ def predict(model, loader, device, tta=False, amp=False, max_batches=None, expla
         if tta:
             for dims in ([3], [2]):  # lật ngang, lật dọc
                 variants.append({**b, "images": {k: v.flip(dims) for k, v in b["images"].items()}})
-        with torch.autocast(device_type=device.type, enabled=amp):
+        with torch.autocast(device_type=device.type, enabled=amp, dtype=AMP_DTYPE):
             outs = []
             for j, v in enumerate(variants):
                 outs.append(act(model(v)))
@@ -115,7 +125,7 @@ def _run_stage(*, model, tr_dl, va_dl, criterion, optimizer, epochs, warmup_epoc
     steps_per_epoch = min(len(tr_dl), max_batches or len(tr_dl))
     opt_steps = math.ceil(steps_per_epoch / accum)
     scheduler = warmup_cosine(optimizer, warmup_epochs * opt_steps, epochs * opt_steps)
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp and AMP_DTYPE == torch.float16)  # bf16: không cần
     params = [p for g in optimizer.param_groups for p in g["params"]]
 
     best, best_epoch, history = -np.inf, -1, []
@@ -129,7 +139,7 @@ def _run_stage(*, model, tr_dl, va_dl, criterion, optimizer, epochs, warmup_epoc
             if i >= steps_per_epoch:
                 break
             b = to_device(batch, device)
-            with torch.autocast(device_type=device.type, enabled=use_amp):
+            with torch.autocast(device_type=device.type, enabled=use_amp, dtype=AMP_DTYPE):
                 logits = model(b)
                 loss = (model.compute_loss(logits, b["label"], criterion) if hasattr(model, "compute_loss")
                         else criterion(logits, b["label"]))
@@ -250,7 +260,7 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
                        if lc["name"] == "bce" else ""))
     logger.info(f"Huấn luyện   : epochs {tc['epochs']} | batch {tc['batch_size']} x accum {tc.get('accum_steps', 1)} "
                 f"| AdamW lr {tc['lr']} (backbone x{tc['backbone_lr_mult']}) wd {tc['weight_decay']} "
-                f"| warmup {tc['warmup_epochs']} | sampler_q {tc.get('sampler_q')} | amp {tc.get('amp')} "
+                f"| warmup {tc['warmup_epochs']} | sampler_q {tc.get('sampler_q')} | amp {tc.get('amp')} ({tc.get('amp_dtype', 'fp16')}) "
                 + (f"| monitor {tc['monitor']} | patience {tc['patience']}" if fold is not None
                    else "| full_data: không val, không early stop, dùng epoch cuối"))
     act = output_activation(cfg)

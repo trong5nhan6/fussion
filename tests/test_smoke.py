@@ -526,3 +526,19 @@ def test_ablation_tables_end_to_end(tmp_path):
         sub = pd.read_csv(out / "submissions" / name / "submission.csv")
         assert len(sub) == 25 and sub.iloc[:, 1:].to_numpy().max() <= 1
     assert (out / "thresholds_M0.csv").exists() and len(pd.read_csv(out / "table5_decision.csv")) == 3
+    xl = pd.ExcelFile(out / "ablation_results.xlsx")
+    assert {"1_SOTA", "3_Thanh_phan", "Tom_tat_variant", "Chi_tiet_fold", "Theo_lop", "Nguong_M0"} <= set(xl.sheet_names)
+    summ = pd.read_excel(xl, "Tom_tat_variant")
+    assert list(summ["Variant"]) == ["M0", "CD", "E"] and summ.loc[1, "Số fold"] == 3
+    assert len(pd.read_excel(xl, "Chi_tiet_fold")) == 7 and len(pd.read_excel(xl, "Theo_lop")) == 3 * NUM_CLASSES
+
+
+def test_amp_dtype_and_colab_env():
+    from milk10k import engine
+    engine.set_amp_dtype("bf16")
+    assert engine.AMP_DTYPE is torch.bfloat16
+    engine.set_amp_dtype("fp16")
+    assert engine.AMP_DTYPE is torch.float16
+    cfg = load_config([ROOT / "configs/baselines/swin_base_384.yaml", ROOT / "configs/env/colab_a100.yaml"])
+    assert cfg["train"]["amp_dtype"] == "bf16" and cfg["model"]["grad_checkpointing"] is False
+    assert cfg["train"]["batch_size"] * cfg["train"]["accum_steps"] == 64

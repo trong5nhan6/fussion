@@ -33,6 +33,48 @@ COMPONENTS = [("M0", "đầy đủ"), ("E", "bỏ gate: nối 4 token + MLP"), (
               ("A", "gate + 1 head (loss theo overlay)"), ("B", "transformer + sparse MoE thay gate"),
               ("t1", "1 head logit-adjusted (τ = 1)"), ("nosamp", "bỏ sampler q = 0.5"),
               ("aux0", "bỏ 4 head phụ"), ("md0", "bỏ modality dropout"), ("d1024", "không chiếu, token 1024 chiều")]
+GROUPS = {"M0": "Gốc", **{v: "G1 Modality" for v in ["C", "D", "CD", "CM", "DM"]},
+          **{v: "G2 Fusion" for v in ["E", "A", "B"]}, **{v: "G3 Long-tail" for v in ["t0", "t1", "nosamp"]},
+          **{v: "G4 Thành phần" for v in ["aux0", "md0", "d1024"]}, "sw224": "G5 Độ phân giải"}
+DESC = {**{v: label for v, label, _ in MODALITY}, **dict(COMPONENTS), "sw224": "Swin-B 224 (checkpoint + ảnh 224)"}
+DESC["M0"] = "đầy đủ: Swin-B-384 · D · d256 · r5_nobce · clin+derm+meta"
+ORDER = ["M0", "C", "D", "CD", "CM", "DM", "E", "A", "B", "t0", "t1", "nosamp", "aux0", "md0", "d1024", "sw224"]
+EXCEL_README = [
+    ("Đọc trước", "Tóm tắt các sheet và cách đọc"),
+    ("1_SOTA", "So sánh với các phương pháp đã công bố trên test ẩn 479 lesion"),
+    ("2_Modality", "Bỏ từng nguồn dữ liệu: C = clinical, D = dermoscopy, M = metadata"),
+    ("3_Thanh_phan", "Bỏ / thay từng thành phần thiết kế (gate, 3 head, sampler, head phụ, modality dropout, chiếu 256)"),
+    ("4_Backbone", "Backbone và độ phân giải, cùng công thức D · r5_nobce · clin+derm"),
+    ("5_Quyet_dinh", "Đổi cách biến xác suất thành nhãn (không train lại) trên OOF của M0"),
+    ("Tom_tat_variant", "Số liệu dạng số của mọi variant: Dice mean/std, OOF gộp, Δ ghép cặp với M0, test"),
+    ("Chi_tiet_fold", "Từng run (variant × fold): Dice, AUC, AP, Sens, Spec, BMA, top-1, số phút"),
+    ("Theo_lop", "Dice / Sens / Spec / AUC từng lớp, tính trên OOF gộp của mỗi variant"),
+    ("Nguong_M0", "Ngưỡng tối ưu từng lớp của M0 (fit trên toàn bộ OOF và theo từng fold)"),
+    ("Ghi chú", "Dice = macro F1 ngưỡng 0.5 như leaderboard. Δ = Dice(variant) − Dice(M0) ghép cặp theo fold; "
+                "Δ âm nghĩa là phần bị bỏ có ích. Dòng chỉ có 1 fold nhiễu khoảng ±0.035."),
+]
+
+
+def write_excel(path: Path, sheets: dict) -> None:
+    """Mỗi DataFrame một sheet; tiêu đề in đậm, cố định dòng đầu, độ rộng cột theo nội dung."""
+    from openpyxl.styles import Alignment, Font
+    with pd.ExcelWriter(path, engine="openpyxl") as xw:
+        for name, df in sheets.items():
+            df.to_excel(xw, sheet_name=name[:31], index=False)
+            ws = xw.sheets[name[:31]]
+            ws.freeze_panes = "A2"
+            for cell in ws[1]:
+                cell.font = Font(bold=True)
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+            for col in ws.columns:
+                width = max(len(str(c.value)) if c.value is not None else 0 for c in col)
+                ws.column_dimensions[col[0].column_letter].width = min(max(10, width + 2), 70)
+            for row in ws.iter_rows(min_row=2):
+                for c in row:
+                    if isinstance(c.value, float):
+                        c.number_format = "0.000"
+
+
 # Bảng 1: kết quả đã công bố trên test ẩn 479 lesion (Dice = macro F1 ngưỡng 0.5)
 PUBLISHED = [("CAFFM", "bảng của JI-ADF", 0.232, 0.787), ("SkinM2Former", "bảng của JI-ADF", 0.405, 0.841),
              ("Fine-tuned PanDerm", "bảng của JI-ADF", 0.434, 0.840), ("CoscatNet-UFS", "bảng của JI-ADF", 0.435, 0.800),
@@ -144,6 +186,7 @@ def main():
     ap.add_argument("--dirs", nargs="+", default=["outputs"])
     ap.add_argument("--out", default="outputs/ablation_tables")
     ap.add_argument("--test-scores", default=None, help="yaml {tên run / thư mục submission: Dice test}")
+    ap.add_argument("--no-excel", action="store_true", help="Không ghi ablation_results.xlsx")
     ap.add_argument("--backbone", default=None, help="Backbone của các run ablation (mặc định: tự nhận nếu chỉ có 1)")
     args = ap.parse_args()
     out = resolve_path(args.out)
@@ -258,6 +301,42 @@ def main():
         md += ["## File nộp đã tạo", ""] + [f"- `submissions/{n}/submission.csv` ({v})" for v, n in sub_dirs.items()]
         if "M0" in sub_dirs:
             md.append(f"- `submissions/{sub_dirs['M0']}_thr/submission.csv` (M0, ngưỡng theo lớp)")
+    if not args.no_excel:
+        summary, detail, per_class = [], [], []
+        for v in sorted(V, key=lambda x: ORDER.index(x) if x in ORDER else 99):
+            a = V[v]
+            common = sorted(set(a["dice"]) & set(m0["dice"])) if m0 else []
+            d = np.array([a["dice"][f] - m0["dice"][f] for f in common]) if common and v != "M0" else np.array([])
+            sub = sub_dirs.get(v)
+            single = a["runs"][a["folds"][0]]["name"] if len(a["folds"]) == 1 else None
+            summary.append({"Variant": v, "Nhóm": GROUPS.get(v, ""), "Mô tả": DESC.get(v, ""), "Số fold": len(a["folds"]),
+                            "Fold": ",".join(map(str, a["folds"])), "Dice val TB": a["dice_mean"],
+                            "Dice val std": a["dice_std"], "Dice OOF gộp": a["pooled"]["dice"], "AUC val TB": a["auc_mean"],
+                            "Δ TB so với M0": d.mean() if d.size else np.nan,
+                            "Δ std": d.std(ddof=1) if d.size > 1 else np.nan,
+                            "Số fold giảm": int((d < 0).sum()) if d.size else np.nan,
+                            "File nộp ensemble": sub or "", "Dice test": tests.get(sub) if sub else tests.get(single)})
+            for f in a["folds"]:
+                r = a["runs"][f]
+                o = r["metrics"]["overall"]
+                detail.append({"Variant": v, "Fold": f, "Run": r["name"], **{k: o.get(k) for k in
+                               ["dice", "auc", "ap", "sensitivity", "specificity", "balanced_acc", "top1_acc"]},
+                               "Phút": r["minutes"], "Dice test": tests.get(r["name"])})
+            for c, row in a["pooled"]["per_class"].items():
+                per_class.append({"Variant": v, "Lớp": c, "n": int(row["n"]), "Dice": row["dice"],
+                                  "Sens": row["sensitivity"], "Spec": row["specificity"], "AUC": row["auc"]})
+        thr_sheet = pd.DataFrame()
+        if (out / "thresholds_M0.csv").exists():
+            all_t = pd.read_csv(out / "thresholds_M0.csv").assign(Fit="toàn bộ OOF")
+            per = pd.read_csv(out / "thresholds_M0_per_fold.csv").rename(columns={"Unnamed: 0": "Fold"})
+            thr_sheet = pd.concat([all_t, per.assign(Fit=lambda x: "fold " + x["Fold"].astype(str) + " (fit trên fold khác)")
+                                   .drop(columns="Fold")], ignore_index=True)[["Fit"] + CLASSES]
+        sheets = {"Đọc trước": pd.DataFrame(EXCEL_README, columns=["Sheet", "Nội dung"]),
+                  "1_SOTA": t1, "2_Modality": t2, "3_Thanh_phan": t3, "4_Backbone": t4, "5_Quyet_dinh": t5,
+                  "Tom_tat_variant": pd.DataFrame(summary), "Chi_tiet_fold": pd.DataFrame(detail),
+                  "Theo_lop": pd.DataFrame(per_class), "Nguong_M0": thr_sheet}
+        write_excel(out / "ablation_results.xlsx", sheets)
+        print(f"Excel: {out / 'ablation_results.xlsx'}")
     for i, (t, n) in enumerate([(t1, "sota"), (t2, "modality"), (t3, "components"), (t4, "backbone"), (t5, "decision")], 1):
         t.to_csv(out / f"table{i}_{n}.csv", index=False)
     (out / "ablation_tables.md").write_text("\n".join(md) + "\n", encoding="utf-8")

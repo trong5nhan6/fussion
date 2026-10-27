@@ -20,6 +20,7 @@ Notebook tự clone repo, tải dữ liệu từ Google Drive và train trên **
 | [`05_multimodal_moe`](notebooks/05_multimodal_moe.ipynb) | Multimodal MoE: chọn hướng (A–E) × loss × backbone × nhánh ảnh | tuỳ chọn (mặc định 30) | T4 x2 |
 | [`07_hires`](notebooks/07_hires.ipynb) | Ảnh 384: ViT-B, Swin-B, Swin-L, EfficientNetV2-M/L với công thức MoE D · r5_nobce | tuỳ chọn (mặc định 2) | T4 x2 |
 | [`08_ablation`](notebooks/08_ablation.ipynb) | Ablation cho paper quanh Swin-384 MoE-D: modality, gate, head long-tail, sampler, thành phần, 224/384, ngưỡng theo lớp → 5 bảng | P1: 20 · P2: 12 | T4 x2 |
+| [`08_ablation_colab`](notebooks/08_ablation_colab.ipynb) | Như 08 trên **Google Colab A100** (bf16, TF32, batch 16 × 4, 1–2 run/GPU theo VRAM), đồng bộ Google Drive, xuất **Excel** | 32 | A100 |
 
 **Chuẩn bị một lần:**
 1. Nén thư mục dữ liệu: `cd datasets && zip -r ../MILK10k.zip MILK10k` (khoảng 360MB). Tải lên Google Drive,
@@ -207,6 +208,7 @@ python scripts/ablation_tables.py --dirs outputs <outputs notebook 07> --test-sc
 
 `ablation_tables.py` ghi `outputs/ablation_tables/`: 5 bảng (markdown + csv), Δ so với M0 ghép cặp theo fold,
 file nộp ensemble các fold, và file nộp với **ngưỡng riêng từng lớp** (`milk10k/thresholds.py`, fit lồng nhau trên OOF).
+Mặc định ghi thêm `ablation_results.xlsx` (10 sheet: 5 bảng, tóm tắt variant, từng fold, từng lớp, ngưỡng).
 Tuỳ chọn mới: `moe.use_metadata: false` (bỏ 2 token metadata), overlay `configs/ablation/r5_nosampler.yaml`.
 
 ## Tuỳ chọn tiền xử lý, loss và quyết định (stage 4)
