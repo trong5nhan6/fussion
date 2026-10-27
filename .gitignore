@@ -2,6 +2,8 @@
 # Dữ liệu tải từ Google Drive, không đưa lên git (giấy phép CC-BY-NC của MILK study team)
 datasets/
 outputs/
+# Kết quả train tải về từ Kaggle/Colab và các bản phân tích: chỉ giữ trên máy, không push
+results/
 *.pt
 *.zip
 

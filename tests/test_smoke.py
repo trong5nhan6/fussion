@@ -542,3 +542,35 @@ def test_amp_dtype_and_colab_env():
     cfg = load_config([ROOT / "configs/baselines/swin_base_384.yaml", ROOT / "configs/env/colab_a100.yaml"])
     assert cfg["train"]["amp_dtype"] == "bf16" and cfg["model"]["grad_checkpointing"] is False
     assert cfg["train"]["batch_size"] * cfg["train"]["accum_steps"] == 64
+
+
+def test_shared_dir_claims_between_machines(tmp_path):
+    shared = tmp_path / "drive_outputs"
+    assert run_grid.try_claim(shared, "r1", "may1:1") == "claimed"
+    assert run_grid.try_claim(shared, "r1", "may2:7") == "busy"        # máy 1 đang chạy
+    assert run_grid.try_claim(shared, "r1", "may1:1") == "claimed"     # chính máy 1 nhận lại được
+    old = time.time() - run_grid.CLAIM_STALE_S - 60                    # máy 1 ngừng cập nhật quá lâu
+    os.utime(run_grid.claim_path(shared, "r1"), (old, old))
+    assert run_grid.try_claim(shared, "r1", "may2:7") == "claimed"
+    run_grid.release_claim(shared, "r1")
+    assert not run_grid.claim_path(shared, "r1").exists()
+    done = shared / "r2"
+    done.mkdir(parents=True)
+    (done / "metrics.json").write_text("{}")
+    (done / "submission.csv").write_text("")
+    assert run_grid.try_claim(shared, "r2", "may2:7") == "done"
+
+
+def test_grid_worker_skips_runs_of_other_machine(tmp_path):
+    shared = tmp_path / "drive_outputs"
+    assert run_grid.try_claim(shared, "busy_run", "may_khac:1") == "claimed"   # máy khác đang chạy
+    (shared / "done_run").mkdir(parents=True)
+    (shared / "done_run" / "metrics.json").write_text("{}")
+    (shared / "done_run" / "submission.csv").write_text("")
+    jobs = [run_grid.Job("busy_run", [], []), run_grid.Job("done_run", [], [])]
+    grid = run_grid.Grid(jobs, tmp_path / "out", time.time() + 3600, 0.01, 1, shared)
+    grid.worker(None)                                  # không job nào được train
+    assert [j.status for j in jobs] == ["busy_elsewhere", "done_elsewhere"]
+
+
+import time  # noqa: E402

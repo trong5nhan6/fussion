@@ -4,6 +4,9 @@
 - Resume: run đã có metrics.json + submission.csv thì bỏ qua; run dở dang thì xoá và chạy lại.
   Kết quả phiên trước (vd output của notebook Kaggle được gắn làm input) khôi phục bằng --restore.
 - Giới hạn thời gian: không bắt đầu run mới nếu không kịp xong trước --time-budget-h.
+- Nhiều máy cùng lưới (vd 2 notebook Colab): --shared-dir <thư mục chung, vd Google Drive>. Trước mỗi run, máy kiểm tra
+  run đã xong ở thư mục chung chưa, rồi ghi file đánh dấu _claims/<run> (cập nhật mỗi phút khi đang chạy). Máy khác thấy
+  đánh dấu còn "sống" thì bỏ qua run đó. --reverse: chạy danh sách theo thứ tự ngược (máy thứ 2) để hai máy ít chạm nhau.
 
   python scripts/run_grid.py experiments/stage1_baselines.yaml --env configs/env/kaggle_t4.yaml --dry-run
   python scripts/run_grid.py experiments/stage2_imbalance.yaml --env configs/env/kaggle_t4.yaml \
@@ -12,6 +15,7 @@
 import argparse
 import os
 import queue
+import socket
 import shutil
 import statistics
 import subprocess
@@ -204,6 +208,42 @@ def restore(sources, out_dir: Path) -> int:
     return n
 
 
+CLAIM_STALE_S = 20 * 60   # đánh dấu không được cập nhật quá 20 phút -> coi như máy kia đã dừng
+
+
+def claim_path(shared: Path, name: str) -> Path:
+    return shared / "_claims" / name
+
+
+def try_claim(shared: Path, name: str, owner: str, stale_s: float = CLAIM_STALE_S) -> str:
+    """-> "done" (đã xong ở thư mục chung) | "busy" (máy khác đang chạy) | "claimed" (máy này nhận run)."""
+    if is_done(shared / name):
+        return "done"
+    path = claim_path(shared, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        age = time.time() - path.stat().st_mtime
+        holder = path.read_text(encoding="utf-8", errors="replace").strip()
+        if age < stale_s and holder != owner:
+            return "busy"
+    path.write_text(owner, encoding="utf-8")
+    return "claimed"
+
+
+def touch_claim(shared: Path, name: str) -> None:
+    try:
+        os.utime(claim_path(shared, name))
+    except OSError:
+        pass
+
+
+def release_claim(shared: Path, name: str) -> None:
+    try:
+        claim_path(shared, name).unlink()
+    except OSError:
+        pass
+
+
 def detect_gpus(arg: str) -> list:
     if arg == "cpu":
         return [None]
@@ -218,11 +258,14 @@ def detect_gpus(arg: str) -> list:
 
 
 class Grid:
-    def __init__(self, jobs, out_dir: Path, deadline: float, est_run_h: float, poll_s: int):
+    def __init__(self, jobs, out_dir: Path, deadline: float, est_run_h: float, poll_s: int,
+                 shared: Path | None = None):
         self.q = queue.Queue()
         for j in jobs:
             self.q.put(j)
         self.out_dir, self.deadline, self.est_run_h, self.poll_s = out_dir, deadline, est_run_h, poll_s
+        self.shared = shared
+        self.owner = f"{socket.gethostname()}:{os.getpid()}"
         self.lock = threading.Lock()
         self.durations = []
         self.log_dir = out_dir / "_grid_logs"
@@ -248,7 +291,17 @@ class Grid:
                 job.status = "not_started"
                 self.say(f"[GPU {gpu}] bỏ qua {job.name}: còn {left / 60:.0f} phút, không kịp xong")
                 continue
+            if self.shared is not None:
+                with self.lock:
+                    state = try_claim(self.shared, job.name, self.owner)
+                if state != "claimed":
+                    job.status = "done_elsewhere" if state == "done" else "busy_elsewhere"
+                    self.say(f"[GPU {gpu}] bỏ qua {job.name}: " + ("đã xong ở máy khác" if state == "done"
+                                                                    else "máy khác đang chạy"))
+                    continue
             self.run(job, gpu)
+            if self.shared is not None and job.status == "failed":
+                release_claim(self.shared, job.name)   # để máy khác (hoặc lần chạy sau) thử lại
 
     def run(self, job: Job, gpu):
         run_dir = self.out_dir / job.name
@@ -269,6 +322,8 @@ class Grid:
             while proc.poll() is None:
                 time.sleep(self.poll_s)
                 offset = self.echo_epochs(run_dir / "train.log", offset, gpu, job.name)
+                if self.shared is not None:
+                    touch_claim(self.shared, job.name)   # nhịp tim: máy khác biết run vẫn đang chạy
             self.echo_epochs(run_dir / "train.log", offset, gpu, job.name)
         job.minutes = (time.time() - t0) / 60
         if proc.returncode == 0 and is_done(run_dir):
@@ -317,6 +372,9 @@ def main():
     ap.add_argument("--poll-s", type=int, default=60)
     ap.add_argument("--set", nargs="*", default=[], help="Override thêm cho mọi run")
     ap.add_argument("--suffix", default="", help="Hậu tố tên run, vd ep30 -> resnet152__ce_sqrtinv__clin__ep30")
+    ap.add_argument("--shared-dir", default=None,
+                    help="Thư mục chung giữa nhiều máy (vd Google Drive): bỏ qua run đã xong / máy khác đang chạy")
+    ap.add_argument("--reverse", action="store_true", help="Chạy danh sách theo thứ tự ngược (máy thứ 2)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     start = time.time()
@@ -339,6 +397,8 @@ def main():
         if is_done(out_dir / j.name):
             j.status = "done_before"
     pending = [j for j in jobs if j.status == "pending"]
+    if args.reverse:
+        pending.reverse()
     gpus = detect_gpus(args.gpus)
     print(f"Lưới {exp['name']}: {len(jobs)} run | đã xong {len(jobs) - len(pending)} | cần chạy {len(pending)} "
           f"| GPU {gpus} | ngân sách {args.time_budget_h} giờ")
@@ -353,7 +413,11 @@ def main():
     if args.dry_run or not pending:
         return
 
-    grid = Grid(pending, out_dir, start + args.time_budget_h * 3600, args.est_run_h, args.poll_s)
+    shared = resolve_path(args.shared_dir) if args.shared_dir else None
+    if shared is not None:
+        shared.mkdir(parents=True, exist_ok=True)
+        print(f"Thư mục chung: {shared} | máy: {socket.gethostname()}" + (" | thứ tự ngược" if args.reverse else ""))
+    grid = Grid(pending, out_dir, start + args.time_budget_h * 3600, args.est_run_h, args.poll_s, shared)
     threads = [threading.Thread(target=grid.worker, args=(g,), daemon=True) for g in gpus]
     for t in threads:
         t.start()
@@ -361,7 +425,8 @@ def main():
         t.join()
 
     print("\n" + "=" * 80)
-    labels = {"done_before": "đã xong trước", "done": "xong", "failed": "LỖI", "not_started": "chưa chạy (hết giờ)"}
+    labels = {"done_before": "đã xong trước", "done": "xong", "failed": "LỖI", "not_started": "chưa chạy (hết giờ)",
+              "done_elsewhere": "xong ở máy khác", "busy_elsewhere": "máy khác đang chạy"}
     for j in jobs:
         dice = f"Dice={j.dice:.4f}" if j.dice is not None else "không val"
         extra = f" | {dice} | {j.minutes:.0f} phút | GPU {j.gpu}" if j.status == "done" else ""
