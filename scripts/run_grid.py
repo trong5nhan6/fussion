@@ -215,8 +215,9 @@ def claim_path(shared: Path, name: str) -> Path:
     return shared / "_claims" / name
 
 
-def try_claim(shared: Path, name: str, owner: str, stale_s: float = CLAIM_STALE_S) -> str:
+def try_claim(shared: Path, name: str, owner: str, stale_s: float | None = None) -> str:
     """-> "done" (đã xong ở thư mục chung) | "busy" (máy khác đang chạy) | "claimed" (máy này nhận run)."""
+    stale_s = CLAIM_STALE_S if stale_s is None else stale_s
     if is_done(shared / name):
         return "done"
     path = claim_path(shared, name)
@@ -265,7 +266,9 @@ class Grid:
             self.q.put(j)
         self.out_dir, self.deadline, self.est_run_h, self.poll_s = out_dir, deadline, est_run_h, poll_s
         self.shared = shared
-        self.owner = f"{socket.gethostname()}:{os.getpid()}"
+        # Nhận diện theo MÁY (không theo tiến trình): chạy lại notebook trên cùng máy vẫn nhận lại được run của mình
+        self.owner = socket.gethostname()
+        self.retry_busy = True
         self.lock = threading.Lock()
         self.durations = []
         self.log_dir = out_dir / "_grid_logs"
@@ -294,11 +297,22 @@ class Grid:
             if self.shared is not None:
                 with self.lock:
                     state = try_claim(self.shared, job.name, self.owner)
-                if state != "claimed":
-                    job.status = "done_elsewhere" if state == "done" else "busy_elsewhere"
-                    self.say(f"[GPU {gpu}] bỏ qua {job.name}: " + ("đã xong ở máy khác" if state == "done"
-                                                                    else "máy khác đang chạy"))
+                if state == "done":
+                    job.status = "done_elsewhere"
+                    self.say(f"[GPU {gpu}] bỏ qua {job.name}: đã xong ở máy khác")
                     continue
+                if state == "busy":
+                    if job.status != "busy_elsewhere":
+                        self.say(f"[GPU {gpu}] {job.name}: máy khác đang giữ -> để cuối hàng, thử lại sau")
+                    job.status = "busy_elsewhere"
+                    if not self.retry_busy:
+                        continue
+                    # Đưa về cuối hàng: máy kia xong -> "đã xong"; máy kia dừng (đánh dấu cũ > 20 phút) -> nhận chạy
+                    if self.q.empty():
+                        time.sleep(min(self.poll_s, 60))
+                    self.q.put(job)
+                    continue
+                job.status = "pending"
             self.run(job, gpu)
             if self.shared is not None and job.status == "failed":
                 release_claim(self.shared, job.name)   # để máy khác (hoặc lần chạy sau) thử lại

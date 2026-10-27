@@ -569,8 +569,31 @@ def test_grid_worker_skips_runs_of_other_machine(tmp_path):
     (shared / "done_run" / "submission.csv").write_text("")
     jobs = [run_grid.Job("busy_run", [], []), run_grid.Job("done_run", [], [])]
     grid = run_grid.Grid(jobs, tmp_path / "out", time.time() + 3600, 0.01, 1, shared)
+    grid.retry_busy = False                            # mặc định: run bị giữ được đưa về cuối hàng chờ thử lại
     grid.worker(None)                                  # không job nào được train
     assert [j.status for j in jobs] == ["busy_elsewhere", "done_elsewhere"]
+    # Cùng máy (cùng hostname), tiến trình mới: nhận lại được run do chính máy này đánh dấu trước đó
+    assert run_grid.try_claim(shared, "own_run", grid.owner) == "claimed"
+    assert run_grid.try_claim(shared, "own_run", run_grid.Grid([], tmp_path / "o2", 0, 1, 1, shared).owner) == "claimed"
+
+
+def test_grid_requeues_busy_run_until_claim_goes_stale(tmp_path, monkeypatch):
+    shared = tmp_path / "drive_outputs"
+    assert run_grid.try_claim(shared, "r", "may_khac") == "claimed"
+    job = run_grid.Job("r", [], [])
+    grid = run_grid.Grid([job], tmp_path / "out", time.time() + 3600, 0.0001, 0, shared)
+    calls = []
+
+    def fake_run(j, gpu):
+        calls.append(j.name)
+        j.status = "done"
+    monkeypatch.setattr(grid, "run", fake_run)
+    monkeypatch.setattr(run_grid, "CLAIM_STALE_S", 0.0)  # đánh dấu của máy khác coi như đã cũ ngay
+    monkeypatch.setattr(run_grid.time, "sleep", lambda s: None)
+    old = time.time() - 5
+    os.utime(run_grid.claim_path(shared, "r"), (old, old))
+    grid.worker(None)
+    assert calls == ["r"] and job.status == "done"
 
 
 import time  # noqa: E402
