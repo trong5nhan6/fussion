@@ -441,3 +441,88 @@ def test_trainable_stages_other_backbones(cfg_name):
     e = build_model(cfg).encoder
     n_tr, n_all = (sum(p.numel() for p in e.parameters() if p.requires_grad), sum(p.numel() for p in e.parameters()))
     assert 0 < n_tr < n_all
+
+
+# ---------------------------------------------------------------- ablation (stage 6)
+def test_moe_without_metadata_has_only_image_tokens():
+    cfg = load_config([ROOT / "configs/baselines/vit_small.yaml", ROOT / "configs/moe/D.yaml"],
+                      ["model.pretrained=false", "moe.d_model=64", "moe.use_metadata=false"])
+    m = build_model(cfg, meta_dim=34).eval()
+    assert m.tokens.modalities == ["clin", "derm"] and not hasattr(m.tokens, "demo")
+    assert len(m.aux_heads) == 2 and m.uses_metadata is False
+    s = cfg["data"]["img_size"]
+    batch = {"images": {v: torch.randn(2, 3, s, s) for v in ["clin", "derm"]}, "meta": torch.randn(2, 34)}
+    with torch.no_grad():
+        assert m(batch).shape == (2, NUM_CLASSES)
+    assert set(m.last_explain) == {"gate_clin", "gate_derm"}
+
+
+def test_stage6_variant_jobs_one_factor_and_folds():
+    exp = _exp("stage6_ablation.yaml")
+    jobs = run_grid.build_variant_jobs(exp, "configs/env/kaggle_t4.yaml", only_variants=["M0", "CD", "nosamp"])
+    names = [j.name for j in jobs]
+    assert names[:3] == ["swin_base_384__abl_M0__f0", "swin_base_384__abl_CD__f0", "swin_base_384__abl_nosamp__f0"]
+    assert len(jobs) == 5 + 5 + 1                          # M0, CD: 5 fold; nosamp: fold 0
+    cd = next(j for j in jobs if j.name == "swin_base_384__abl_CD__f3")
+    cfg = load_config([ROOT / c for c in cd.configs], cd.sets)
+    assert cfg["moe"]["use_metadata"] is False and cfg["train"]["folds"] == [3] and cfg["moe"]["d_model"] == 256
+    ns = next(j for j in jobs if "nosamp" in j.name)
+    assert load_config([ROOT / c for c in ns.configs], ns.sets)["train"]["sampler_q"] is None
+    only = run_grid.build_variant_jobs(exp, None, only_variants=["E"], folds=[1, 2])
+    assert [j.name for j in only] == ["swin_base_384__abl_E__f1", "swin_base_384__abl_E__f2"]
+
+
+def test_class_thresholds_monotone_mapping():
+    from milk10k.thresholds import apply_thresholds, fit_thresholds, nested_threshold_scores
+    rng = np.random.default_rng(0)
+    p = rng.dirichlet(np.ones(NUM_CLASSES), size=300)
+    y = p.argmax(1)
+    t = np.full(NUM_CLASSES, 0.3)
+    s = apply_thresholds(p, t)
+    assert np.array_equal(s > 0.5, p > 0.3) and s.min() >= 0 and s.max() <= 1
+    assert fit_thresholds(y, p).shape == (NUM_CLASSES,)
+    scores, per_fold, nested = nested_threshold_scores(y, p, np.arange(300) % 3)
+    assert nested and len(per_fold) == 3 and scores.shape == p.shape
+
+
+def _fake_run(d, fold, rng, test_ids):
+    from milk10k import CLASSES
+    import json
+    d.mkdir(parents=True)
+    n = 60
+    p = rng.dirichlet(np.ones(len(CLASSES)), size=n)
+    y = np.arange(n) % len(CLASSES)
+    oof = pd.DataFrame(p, columns=CLASSES)
+    oof.insert(0, "lesion_id", [f"L{fold}_{i}" for i in range(n)])
+    oof.insert(1, "fold", fold)
+    oof.insert(2, "label", y)
+    oof.to_csv(d / "oof.csv", index=False)
+    tp = pd.DataFrame(rng.dirichlet(np.ones(len(CLASSES)), size=len(test_ids)), columns=CLASSES)
+    tp.insert(0, "lesion_id", test_ids)
+    tp.to_csv(d / "test_probs.csv", index=False)
+    m = compute_metrics(y, p, "top1")
+    (d / "metrics.json").write_text(json.dumps({"postprocess": "top1", "overall": {k: v for k, v in m.items()
+                                                                                    if k != "per_class"}}))
+
+
+import pandas as pd  # noqa: E402
+
+
+def test_ablation_tables_end_to_end(tmp_path):
+    import subprocess
+    rng = np.random.default_rng(1)
+    test_ids = [f"T{i}" for i in range(25)]
+    for v, folds in [("M0", [0, 1, 2]), ("CD", [0, 1, 2]), ("E", [0])]:
+        for f in folds:
+            _fake_run(tmp_path / "runs" / f"swin_base_384__abl_{v}__f{f}", f, rng, test_ids)
+    out = tmp_path / "tables"
+    r = subprocess.run([sys.executable, str(ROOT / "scripts/ablation_tables.py"), "--dirs", str(tmp_path / "runs"),
+                        "--out", str(out)], capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    assert r.returncode == 0, r.stderr[-2000:]
+    md = (out / "ablation_tables.md").read_text(encoding="utf-8")
+    assert "± " in md and "(3 fold" in md and "(1 fold)" in md
+    for name in ["swin_base_384__abl_M0__cv3", "swin_base_384__abl_M0__cv3_thr", "swin_base_384__abl_CD__cv3"]:
+        sub = pd.read_csv(out / "submissions" / name / "submission.csv")
+        assert len(sub) == 25 and sub.iloc[:, 1:].to_numpy().max() <= 1
+    assert (out / "thresholds_M0.csv").exists() and len(pd.read_csv(out / "table5_decision.csv")) == 3

@@ -3,6 +3,7 @@
 Mỗi lesion -> tối đa 4 token d chiều: [clin], [derm] (theo model.views), demo (20 chiều), monet (14 chiều).
 Mặc định token ảnh là CLS/đặc trưng gộp của backbone giữ NGUYÊN (không chiếu): d = số chiều backbone
 (768 ViT/DINOv2, 1024 Swin/ConvNeXt); 2 token metadata được MLP đưa lên d. Đặt moe.d_model = số nguyên để chiếu về d đó.
+moe.use_metadata = false: bỏ 2 token metadata, chỉ còn token ảnh (ablation "không metadata").
 Bốn hướng (model.arch):
   A  gate theo nguồn: expert riêng mỗi nguồn -> h_m; gate(mọi token) -> g; z = Σ g_m h_m      -> 1 head
   B  transformer + sparse MoE: [CLS, token...] -> (attention -> MoE-FFN top-k) x n_blocks; z = CLS -> 1 head
@@ -39,10 +40,11 @@ class TokenEncoder(nn.Module):
     """
 
     def __init__(self, backbone, views, pretrained, img_size, d, grad_checkpointing, modality_dropout, dropout,
-                 drop_path_rate=0.0, trainable_blocks=None):
+                 drop_path_rate=0.0, trainable_blocks=None, use_metadata=True):
         super().__init__()
         self.views = check_views(views)
-        self.modalities = self.views + ["demo", "monet"]
+        self.use_metadata = bool(use_metadata)
+        self.modalities = self.views + (["demo", "monet"] if self.use_metadata else [])
         self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing, drop_path_rate,
                                       trainable_blocks)
         feat = self.encoder.num_features
@@ -52,8 +54,9 @@ class TokenEncoder(nn.Module):
         else:
             self.img_proj = nn.Sequential(nn.Linear(feat, d), nn.LayerNorm(d))
         self.d = d
-        self.demo = nn.Sequential(mlp(DEMO_DIM, d, dropout), nn.LayerNorm(d))
-        self.monet = nn.Sequential(mlp(MONET_DIM, d, dropout), nn.LayerNorm(d))
+        if self.use_metadata:
+            self.demo = nn.Sequential(mlp(DEMO_DIM, d, dropout), nn.LayerNorm(d))
+            self.monet = nn.Sequential(mlp(MONET_DIM, d, dropout), nn.LayerNorm(d))
         M = len(self.modalities)
         self.type_emb = nn.Parameter(torch.zeros(M, d))   # "nhãn nguồn" của từng token
         self.missing = nn.Parameter(torch.zeros(M, d))    # token thay thế khi nguồn bị che
@@ -64,7 +67,8 @@ class TokenEncoder(nn.Module):
     def forward(self, batch):
         meta = batch["meta"]
         toks = [self.img_proj(self.encoder(batch["images"][v])) for v in self.views]
-        toks += [self.demo(meta[:, :DEMO_DIM]), self.monet(meta[:, DEMO_DIM:DEMO_DIM + MONET_DIM])]
+        if self.use_metadata:
+            toks += [self.demo(meta[:, :DEMO_DIM]), self.monet(meta[:, DEMO_DIM:DEMO_DIM + MONET_DIM])]
         x = torch.stack(toks, dim=1)                      # [B, M, d]
         if self.training and self.p_drop > 0:
             B, M, _ = x.shape
@@ -184,14 +188,16 @@ class MultimodalMoE(nn.Module):
     def __init__(self, arch, backbone, views, pretrained=True, img_size=224, grad_checkpointing=False,
                  d_model=None, n_experts=4, top_k=2, n_blocks=2, n_heads=4, balance_alpha=0.01, aux_weight=0.25,
                  modality_dropout=0.15, lt_taus=(0.0, 0.5, 1.0), dropout=0.1, head_dropout=0.3,
-                 fusion_lr_mult=1.0, drop_path_rate=0.0, trainable_blocks=None, num_classes=NUM_CLASSES):
+                 fusion_lr_mult=1.0, drop_path_rate=0.0, trainable_blocks=None, use_metadata=True,
+                 num_classes=NUM_CLASSES):
         super().__init__()
         if arch not in ARCHS:
             raise ValueError(f"model.arch phải là một trong {list(ARCHS)}, nhận {arch!r}")
         self.arch = arch
         fusion, self.longtail = ARCHS[arch]
         self.tokens = TokenEncoder(backbone, views, pretrained, img_size, d_model, grad_checkpointing,
-                                   modality_dropout, dropout, drop_path_rate, trainable_blocks)
+                                   modality_dropout, dropout, drop_path_rate, trainable_blocks, use_metadata)
+        self.uses_metadata = self.tokens.use_metadata
         M = len(self.tokens.modalities)
         d_model = self.tokens.d                           # = số chiều backbone khi không chiếu
         self.fusion = {"gated": lambda: GatedFusion(M, d_model, dropout),

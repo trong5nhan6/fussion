@@ -28,7 +28,8 @@ from milk10k.config import _load_yaml, load_config
 from milk10k.utils import PROJECT_ROOT, load_json, resolve_path
 
 # Tham số in ra khi --dry-run để kiểm tra cấu hình thực tế (sau khi gộp config + overlay + env + --set)
-SHOW_KEYS = ["model.name", "model.arch", "data.img_size", "data.resize", "data.aug", "model.drop_path_rate", "train.batch_size", "train.accum_steps", "train.epochs", "train.patience", "train.lr",
+SHOW_KEYS = ["model.name", "model.arch", "model.views", "moe.use_metadata", "moe.lt_taus", "moe.aux_weight",
+             "moe.modality_dropout", "moe.d_model", "data.img_size", "data.resize", "data.aug", "model.drop_path_rate", "train.batch_size", "train.accum_steps", "train.epochs", "train.patience", "train.lr",
              "train.backbone_lr_mult", "train.weight_decay", "train.folds", "model.grad_checkpointing",
              "model.dropout", "loss.name", "loss.class_weight", "train.sampler_q", "crt.enabled",
              "predict.tta", "predict.postprocess"]
@@ -52,8 +53,11 @@ def _yaml(path) -> dict:
 
 
 def _is_sampler_overlay(path) -> bool:
-    """Overlay chỉ đổi cách lấy mẫu (sampler_q), không đổi loss/cRT -> vẫn dùng được với head long-tail."""
+    """Overlay chỉ đổi cách lấy mẫu (sampler_q), không đổi loss/cRT -> vẫn dùng được với head long-tail.
+    Overlay ghi `lt_compatible: true` (vd r5_nosampler) cũng được giữ."""
     d = _yaml(path)
+    if d.get("lt_compatible"):
+        return True
     return bool((d.get("train") or {}).get("sampler_q")) and not (d.get("crt") or {}).get("enabled")
 
 
@@ -106,6 +110,50 @@ def build_jobs(exp: dict, env: str | None, only_backbones=None, extra_set=(), su
     return jobs
 
 
+OVERLAY_DIRS = ("configs/imbalance", "configs/ablation")
+
+
+def _overlay_path(name: str) -> str:
+    for d in OVERLAY_DIRS:
+        if (PROJECT_ROOT / d / f"{name}.yaml").exists():
+            return f"{d}/{name}.yaml"
+    raise SystemExit(f"Không tìm thấy overlay '{name}' trong {OVERLAY_DIRS}")
+
+
+def build_variant_jobs(exp: dict, env: str | None, only_backbones=None, extra_set=(), suffix: str = "",
+                       only_variants=None, folds=None) -> list[Job]:
+    """Lưới dạng `variants` (ablation): mỗi variant là một cấu hình đặt tên, mỗi fold là một job riêng.
+
+    variant: {arch: D, overlay: r5_nobce, views: [clin, derm], set: [...], folds: [0, ...], config: <baseline>}
+    Tên run: <backbone>__abl_<variant>__f<fold>[__<hậu tố>]. `folds` (CLI) ghi đè folds của từng variant.
+    Thứ tự job: theo fold trước (mọi variant fold 0, rồi fold 1, ...) để có kết quả fold 0 sớm nhất.
+    """
+    variants = exp["variants"]
+    _check("Backbone", only_backbones, exp["backbones"], exp["name"])
+    _check("Variant", only_variants, variants, exp["name"])
+    jobs = []
+    for key, entry in exp["backbones"].items():
+        if only_backbones and key not in only_backbones:
+            continue
+        entry = {"config": entry} if isinstance(entry, str) else entry
+        plan = []
+        for vname, v in variants.items():
+            if only_variants and vname not in only_variants:
+                continue
+            for fold in (folds if folds is not None else v.get("folds", [0])):
+                plan.append((int(fold), vname, v))
+        plan.sort(key=lambda t: t[0])
+        for fold, vname, v in plan:
+            configs = [v.get("config", entry["config"]), f"configs/moe/{v.get('arch', 'D')}.yaml",
+                       *([_overlay_path(v["overlay"])] if v.get("overlay") else []), *([env] if env else [])]
+            views = v.get("views", ["clin", "derm"])
+            sets = [*(exp.get("set") or []), *(entry.get("set") or []), *(v.get("set") or []),
+                    f"model.views=[{','.join(views)}]", f"train.folds=[{fold}]", *extra_set]
+            name = f"{key}__abl_{vname}__f{fold}" + (f"__{suffix}" if suffix else "")
+            jobs.append(Job(name, configs, sets, extra={"col": f"{key} {vname}", "variant": vname, "fold": fold}))
+    return jobs
+
+
 def effective_table(jobs: list[Job]) -> str:
     """Bảng cấu hình thực tế: mỗi backbone một cột (lấy run đầu tiên của backbone đó)."""
     import pandas as pd
@@ -124,7 +172,13 @@ def effective_table(jobs: list[Job]) -> str:
             row[k] = node
         row["model.backbone"] = cfg["model"]["backbone"]
         cols[key] = row
-    return pd.DataFrame(cols).to_string()
+    table = pd.DataFrame(cols)
+    if any("variant" in j.extra for j in jobs) and table.shape[1] > 1:
+        # Lưới ablation: mỗi variant 1 dòng, chỉ hiện tham số khác nhau; phần chung in một dòng
+        same = table.astype(str).nunique(axis=1) == 1
+        common = ", ".join(f"{k}={table.loc[k].iloc[0]}" for k in table.index[same])
+        return "Chung: " + common + "\n\n" + table[~same].T.to_string()
+    return table.to_string()
 
 
 def is_done(run_dir: Path) -> bool:
@@ -252,6 +306,8 @@ def main():
     ap.add_argument("--archs", default=None, help="Chỉ chạy các hướng MoE này, vd A,B,C,D")
     ap.add_argument("--overlays", default=None, help="Chỉ dùng các overlay này (tên file), vd ce_sqrt_inv,sampler_q05")
     ap.add_argument("--views", default=None, help="Chỉ chạy các nhánh ảnh này, vd clin,derm,clin+derm")
+    ap.add_argument("--variants", default=None, help="Lưới dạng variants (ablation): chỉ chạy các variant này")
+    ap.add_argument("--folds", default=None, help="Lưới variants: chạy các fold này cho mọi variant, vd 0,1,2,3,4")
     ap.add_argument("--skip-lt-base", action="store_true",
                     help="Hướng long-tail (C, D, E): không thêm run không overlay (tag lt)")
     ap.add_argument("--gpus", default="auto", help="auto | cpu | 0,1")
@@ -267,8 +323,13 @@ def main():
 
     exp = yaml.safe_load(resolve_path(args.experiment).read_text(encoding="utf-8"))
     split = lambda v: [x.strip() for x in v.split(",") if x.strip()] if v else None  # noqa: E731
-    jobs = build_jobs(exp, args.env, split(args.backbones), args.set, args.suffix,
-                      split(args.archs), split(args.overlays), split(args.views), lt_base=not args.skip_lt_base)
+    if "variants" in exp:
+        folds = [int(f) for f in split(args.folds)] if args.folds else None
+        jobs = build_variant_jobs(exp, args.env, split(args.backbones), args.set, args.suffix,
+                                  split(args.variants), folds)
+    else:
+        jobs = build_jobs(exp, args.env, split(args.backbones), args.set, args.suffix,
+                          split(args.archs), split(args.overlays), split(args.views), lt_base=not args.skip_lt_base)
     out_dir = resolve_path("outputs")
     out_dir.mkdir(exist_ok=True)
     if args.restore:

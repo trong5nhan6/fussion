@@ -1,0 +1,36 @@
+# Stage 6 — Ablation cho paper quanh mô hình M0 = Swin-B-384 · MoE hướng D · d_model 256 · r5_nobce · clin+derm.
+# Mỗi variant đổi đúng 1 yếu tố so với M0; mỗi fold là 1 job riêng (2 GPU chạy song song).
+# Tên run: <backbone>__abl_<variant>__f<fold>. Tổng hợp bảng: python scripts/ablation_tables.py --dirs outputs
+#
+# Chọn khi chạy:  --variants M0,CD,E,t0 --folds 0,1,2,3,4   (P1, bắt buộc, 5 fold)
+#                 --variants C,D,CM,DM,A,B,t1,nosamp,aux0,md0,d1024,sw224   (P2, mặc định fold 0)
+# Bảng: G1 modality -> Bảng 2 | G2-G4 thành phần -> Bảng 3 | G5 backbone -> Bảng 4 | G6 quyết định: không cần train
+name: stage6_ablation
+backbones:
+  swin_base_384: configs/baselines/swin_base_384.yaml
+# Chung cho mọi variant (như run test 0.512): chiếu CLS về 256; 384 trên T4: batch 8 x accum 8 + grad checkpointing
+set: [moe.d_model=256, train.batch_size=8, train.accum_steps=8, model.grad_checkpointing=true]
+
+variants:
+  # ---- Mốc
+  M0:     {arch: D, overlay: r5_nobce, folds: [0, 1, 2, 3, 4], tier: P1}
+  # ---- G1 Modality (Bảng 2): C = clinical, D = dermoscopy, M = metadata
+  CD:     {arch: D, overlay: r5_nobce, set: [moe.use_metadata=false], folds: [0, 1, 2, 3, 4], tier: P1}
+  C:      {arch: D, overlay: r5_nobce, views: [clin], set: [moe.use_metadata=false], tier: P2}
+  D:      {arch: D, overlay: r5_nobce, views: [derm], set: [moe.use_metadata=false], tier: P2}
+  CM:     {arch: D, overlay: r5_nobce, views: [clin], tier: P2}
+  DM:     {arch: D, overlay: r5_nobce, views: [derm], tier: P2}
+  # ---- G2 Fusion (Bảng 3)
+  E:      {arch: E, overlay: r5_nobce, folds: [0, 1, 2, 3, 4], tier: P1}   # bỏ gate: nối 4 token + MLP
+  A:      {arch: A, overlay: r5_nobce, tier: P2}                           # gate + 1 head (CE, sampler q0.5)
+  B:      {arch: B, overlay: r5_nobce, tier: P2}                           # transformer + sparse MoE + 1 head
+  # ---- G3 Long-tail (Bảng 3)
+  t0:     {arch: D, overlay: r5_nobce, set: ["moe.lt_taus=[0.0]"], folds: [0, 1, 2, 3, 4], tier: P1}
+  t1:     {arch: D, overlay: r5_nobce, set: ["moe.lt_taus=[1.0]"], tier: P2}
+  nosamp: {arch: D, overlay: r5_nosampler, tier: P2}
+  # ---- G4 Thành phần khi train (Bảng 3)
+  aux0:   {arch: D, overlay: r5_nobce, set: [moe.aux_weight=0.0], tier: P2}
+  md0:    {arch: D, overlay: r5_nobce, set: [moe.modality_dropout=0.0], tier: P2}
+  d1024:  {arch: D, overlay: r5_nobce, set: [moe.d_model=null], tier: P2}      # không chiếu: token 1024 chiều
+  # ---- G5 Độ phân giải (Bảng 4): cùng Swin-B, checkpoint + ảnh 224
+  sw224:  {arch: D, overlay: r5_nobce, config: configs/baselines/swin_base.yaml, tier: P2}

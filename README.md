@@ -18,6 +18,8 @@ Notebook tự clone repo, tải dữ liệu từ Google Drive và train trên **
 | [`04_results`](notebooks/04_results.ipynb) | Gộp output các notebook thành bảng báo cáo, file nộp tốt nhất, learning curve | — | Không |
 | [`06_ablation`](notebooks/06_ablation.ipynb) | Ablation từng yếu tố: BCE + sigmoid, resize thẳng, aug mạnh, lr backbone + drop path, gộp tất cả (ảnh + MoE B/D) | mặc định 7 | T4 x2 |
 | [`05_multimodal_moe`](notebooks/05_multimodal_moe.ipynb) | Multimodal MoE: chọn hướng (A–E) × loss × backbone × nhánh ảnh | tuỳ chọn (mặc định 30) | T4 x2 |
+| [`07_hires`](notebooks/07_hires.ipynb) | Ảnh 384: ViT-B, Swin-B, Swin-L, EfficientNetV2-M/L với công thức MoE D · r5_nobce | tuỳ chọn (mặc định 2) | T4 x2 |
+| [`08_ablation`](notebooks/08_ablation.ipynb) | Ablation cho paper quanh Swin-384 MoE-D: modality, gate, head long-tail, sampler, thành phần, 224/384, ngưỡng theo lớp → 5 bảng | P1: 20 · P2: 12 | T4 x2 |
 
 **Chuẩn bị một lần:**
 1. Nén thư mục dữ liệu: `cd datasets && zip -r ../MILK10k.zip MILK10k` (khoảng 360MB). Tải lên Google Drive,
@@ -191,6 +193,21 @@ qua MLP 2 lớp (`model.mlp_hidden`, mặc định 512). `model.concat_meta: tru
 `model.trainable_blocks` (mặc định **4** cho DINOv2): chỉ fine-tune N block cuối + norm cuối, đóng băng patch embedding,
 position embedding và các block đầu (`12` hoặc `null` = fine-tune toàn bộ, `0` = chỉ train MLP). Dùng được cho mọi backbone
 (ViT/DINOv2 tính theo 12 block; Swin/ConvNeXt/ResNet theo 4 stage) và cho cả MoE.
+
+## Ablation cho paper (stage 6)
+
+`experiments/stage6_ablation.yaml` định nghĩa các **variant**, mỗi variant đổi đúng 1 yếu tố so với M0 (Swin-B-384 ·
+MoE D · d_model 256 · r5_nobce · clin+derm). Mỗi fold là 1 run riêng `<backbone>__abl_<variant>__f<fold>`.
+
+```bash
+python scripts/run_grid.py experiments/stage6_ablation.yaml --variants M0,CD,E,t0 --dry-run      # P1: 5 fold
+python scripts/run_grid.py experiments/stage6_ablation.yaml --variants C,D,A --folds 0 --gpus auto
+python scripts/ablation_tables.py --dirs outputs <outputs notebook 07> --test-scores test_scores.yaml
+```
+
+`ablation_tables.py` ghi `outputs/ablation_tables/`: 5 bảng (markdown + csv), Δ so với M0 ghép cặp theo fold,
+file nộp ensemble các fold, và file nộp với **ngưỡng riêng từng lớp** (`milk10k/thresholds.py`, fit lồng nhau trên OOF).
+Tuỳ chọn mới: `moe.use_metadata: false` (bỏ 2 token metadata), overlay `configs/ablation/r5_nosampler.yaml`.
 
 ## Tuỳ chọn tiền xử lý, loss và quyết định (stage 4)
 

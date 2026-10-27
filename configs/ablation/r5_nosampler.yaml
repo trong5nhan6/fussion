@@ -1,0 +1,6 @@
+# Ablation "không sampler": như r5_nobce (squash + aug mạnh + backbone lr x1 + drop path 0.1) nhưng bỏ sampler q=0.5,
+# lấy mẫu theo phân bố gốc. Dùng được với hướng long-tail (C, D, E): loss do 3 head logit-adjusted đảm nhận.
+base: r5_nobce.yaml
+tag: r5_nosamp
+train: {sampler_q: null}
+lt_compatible: true

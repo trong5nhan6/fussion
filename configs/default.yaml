@@ -35,6 +35,7 @@ model:
 moe:
   d_model: null          # null: token ảnh = CLS của backbone, không chiếu (d = 768 ViT/DINOv2, 1024 Swin/ConvNeXt)
                          # số nguyên (vd 256): chiếu đặc trưng ảnh về d chiều như phiên bản cũ
+  use_metadata: true     # false: bỏ 2 token metadata (demo, MONET), chỉ dùng token ảnh (ablation)
   n_experts: 4           # B/C: số expert trong MoE-FFN
   top_k: 2               # B/C: mỗi token qua top-k expert
   n_blocks: 2            # B/C: số khối transformer
