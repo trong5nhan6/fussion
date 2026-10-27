@@ -1,5 +1,5 @@
 # Profile cho Google Colab A100 (40GB hoặc 80GB VRAM, ~12 vCPU). Truyền SAU baseline và overlay.
-# Notebook 08_ablation_colab đặt thêm batch / số job song song theo VRAM thực tế.
+# Notebook 08_ablation_colab_top / _down đặt thêm batch / số job song song theo VRAM thực tế.
 data:
   num_workers: 10           # ảnh MILK10k nhỏ (600x450) -> CPU đủ nhanh; chia đôi khi chạy 2 job cùng GPU
   prefetch_factor: 4

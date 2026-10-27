@@ -20,7 +20,7 @@ Notebook tự clone repo, tải dữ liệu từ Google Drive và train trên **
 | [`05_multimodal_moe`](notebooks/05_multimodal_moe.ipynb) | Multimodal MoE: chọn hướng (A–E) × loss × backbone × nhánh ảnh | tuỳ chọn (mặc định 30) | T4 x2 |
 | [`07_hires`](notebooks/07_hires.ipynb) | Ảnh 384: ViT-B, Swin-B, Swin-L, EfficientNetV2-M/L với công thức MoE D · r5_nobce | tuỳ chọn (mặc định 2) | T4 x2 |
 | [`08_ablation`](notebooks/08_ablation.ipynb) | Ablation cho paper quanh Swin-384 MoE-D: modality, gate, head long-tail, sampler, thành phần, 224/384, ngưỡng theo lớp → 5 bảng | P1: 20 · P2: 12 | T4 x2 |
-| [`08_ablation_colab`](notebooks/08_ablation_colab.ipynb) | Như 08 trên **Google Colab A100** (bf16, TF32, batch 16 × 4, 1–2 run/GPU theo VRAM), đồng bộ Google Drive, xuất **Excel** | 32 | A100 |
+| [`08_ablation_colab_top`](notebooks/08_ablation_colab_top.ipynb) · [`_down`](notebooks/08_ablation_colab_down.ipynb) | Như 08 trên **Google Colab A100** (bf16, TF32, batch 16 × 4, 1–2 run/GPU theo VRAM), đồng bộ Google Drive, xuất **Excel**. `top` chạy danh sách từ trên xuống, `down` từ dưới lên: chạy cùng lúc trên 2 máy A100, phối hợp qua `_claims/` trên Drive, không chạy trùng | 32 | A100 × 1–2 |
 
 **Chuẩn bị một lần:**
 1. Nén thư mục dữ liệu: `cd datasets && zip -r ../MILK10k.zip MILK10k` (khoảng 360MB). Tải lên Google Drive,
