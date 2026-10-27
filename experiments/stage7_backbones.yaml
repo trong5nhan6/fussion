@@ -1,0 +1,32 @@
+# Stage 7 — Bảng 4 của paper: phương pháp có phụ thuộc backbone không?
+# 8 backbone x 2 nhánh, fold 0, cùng một công thức (chỉ backbone thay đổi):
+#   M0  = full phương pháp: MoE hướng D · d_model 256 · r5_nobce · clin + derm + metadata (giống hệt M0 của stage 6)
+#   img = chỉ backbone: backbone dùng chung 2 ảnh -> nối đặc trưng -> MLP 512 -> 11 lớp; CE + sampler q0.5,
+#         cùng aug / lr / drop path (overlay r5_nobce), không metadata
+# Δ = Dice(M0) − Dice(img) cho từng backbone. Tên run: <backbone>__abl_<M0|img>__f0
+# -> swin_base_384__abl_M0__f0 trùng tên với stage 6: notebook 09 chép lại từ Drive của stage 6, không train lại.
+# Bảng: python scripts/ablation_tables.py --dirs outputs
+name: stage7_backbones
+# Thứ tự = thứ tự chạy của notebook top (down chạy ngược): run lâu nhất (Swin-L) trước
+backbones:
+  swin_large_384:
+    config: configs/baselines/swin_large_384.yaml
+    set: [train.batch_size=8, train.accum_steps=8]   # ~2x VRAM của Swin-B: 8 x 8 để chạy 3 run song song trên 80GB
+  dinov2_base_392: configs/baselines/dinov2_base_392.yaml
+  convnext_base_384: configs/baselines/cnn_convnext_base_384.yaml
+  swin_base_384: configs/baselines/swin_base_384.yaml
+  vit_base_384: configs/baselines/vit_base_384.yaml
+  efficientnetv2_m:                                  # CNN ở 384: activation lớn -> 8 x 8 (batch hiệu dụng vẫn 64)
+    config: configs/baselines/efficientnetv2_m.yaml
+    set: [train.batch_size=8, train.accum_steps=8]
+  resnet152_384:
+    config: configs/baselines/cnn_resnet152_384.yaml
+    set: [train.batch_size=8, train.accum_steps=8]
+  resnet50_384: configs/baselines/cnn_resnet50_384.yaml
+# Chung cho mọi backbone: ghi đè lr / dropout riêng của từng config để chỉ backbone thay đổi.
+# Batch lấy từ profile môi trường (Colab A100: 16 x 4, không grad checkpointing).
+set: [moe.d_model=256, train.lr=5.0e-5, model.dropout=0.4]
+
+variants:
+  M0:  {arch: D, overlay: r5_nobce}
+  img: {arch: null, overlay: r5_nobce}

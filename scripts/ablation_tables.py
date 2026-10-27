@@ -39,12 +39,24 @@ GROUPS = {"M0": "Gốc", **{v: "G1 Modality" for v in ["C", "D", "CD", "CM", "DM
 DESC = {**{v: label for v, label, _ in MODALITY}, **dict(COMPONENTS), "sw224": "Swin-B 224 (checkpoint + ảnh 224)"}
 DESC["M0"] = "đầy đủ: Swin-B-384 · D · d256 · r5_nobce · clin+derm+meta"
 ORDER = ["M0", "C", "D", "CD", "CM", "DM", "E", "A", "B", "t0", "t1", "nosamp", "aux0", "md0", "d1024", "sw224"]
+# Bảng 4 (experiments/stage7_backbones.yaml): tên backbone trong tên run -> (tên hiển thị, họ, pretrain, ảnh)
+BACKBONES = {
+    "resnet50_384": ("ResNet-50", "CNN cổ điển", "IN-1k", 384),
+    "resnet152_384": ("ResNet-152", "CNN cổ điển", "IN-1k", 384),
+    "efficientnetv2_m": ("EfficientNetV2-M", "CNN hiện đại", "IN-21k → 1k", 384),
+    "convnext_base_384": ("ConvNeXt-B", "CNN hiện đại", "IN-22k → 1k", 384),
+    "vit_base_384": ("ViT-B/16", "Transformer thuần", "IN-21k → 1k", 384),
+    "dinov2_base_392": ("DINOv2-B/14", "Tự giám sát", "LVD-142M", 392),
+    "swin_base_384": ("Swin-B", "Transformer phân cấp", "IN-22k → 1k", 384),
+    "swin_large_384": ("Swin-L", "Transformer phân cấp", "IN-22k → 1k", 384),
+}
 EXCEL_README = [
     ("Đọc trước", "Tóm tắt các sheet và cách đọc"),
     ("1_SOTA", "So sánh với các phương pháp đã công bố trên test ẩn 479 lesion"),
     ("2_Modality", "Bỏ từng nguồn dữ liệu: C = clinical, D = dermoscopy, M = metadata"),
     ("3_Thanh_phan", "Bỏ / thay từng thành phần thiết kế (gate, 3 head, sampler, head phụ, modality dropout, chiếu 256)"),
-    ("4_Backbone", "Backbone và độ phân giải, cùng công thức D · r5_nobce · clin+derm"),
+    ("4_Backbone", "8 backbone x (chỉ backbone | full phương pháp), fold 0, cùng công thức; Δ = full − chỉ backbone"),
+    ("4b_Backbone_Kaggle", "Run backbone cũ của notebook 07 (Kaggle T4) — chỉ để tham khảo"),
     ("5_Quyet_dinh", "Đổi cách biến xác suất thành nhãn (không train lại) trên OOF của M0"),
     ("Tom_tat_variant", "Số liệu dạng số của mọi variant: Dice mean/std, OOF gộp, Δ ghép cặp với M0, test"),
     ("Chi_tiet_fold", "Từng run (variant × fold): Dice, AUC, AP, Sens, Spec, BMA, top-1, số phút"),
@@ -197,9 +209,8 @@ def main():
 
     abl, other = collect(args.dirs)
     backbones = sorted({bb for bb, _ in abl})
-    if not args.backbone and len(backbones) > 1:
-        raise SystemExit(f"Có nhiều backbone ablation {backbones}: chọn bằng --backbone")
-    bb = args.backbone or (backbones[0] if backbones else "swin_base_384")
+    # Bảng 1-3, 5: backbone của ablation stage 6 (Swin-B-384). Stage 7 thêm run M0/img của backbone khác -> Bảng 4.
+    bb = args.backbone or ("swin_base_384" if "swin_base_384" in backbones or not backbones else backbones[0])
     V = {v: aggregate(r) for (b, v), r in abl.items() if b == bb}
     m0 = V.get("M0")
     print(f"Backbone ablation: {bb} | variant: " + ", ".join(f"{v}({len(a['folds'])} fold)" for v, a in V.items()))
@@ -246,7 +257,39 @@ def main():
     md += ["## Bảng 3 · Ablation thành phần", "",
            "Chỉ kết luận được với dòng có ≥ 3 fold; dòng 1 fold nhiễu khoảng ±0.035.", "", md_table(t3), ""]
 
-    # ---- Bảng 4
+    # ---- Bảng 4: mỗi backbone 2 nhánh ở fold 0 (stage 7) + Swin-B 224 (độ phân giải, stage 6)
+    def dice0(key, var):
+        r = abl.get((key, var), {}).get(0)
+        return (r, r["metrics"]["overall"]) if r else (None, None)
+
+    rows = []
+    for key in sorted({b for b, v in abl if v in ("M0", "img") and b in BACKBONES}, key=list(BACKBONES).index):
+        label, family, pre, size = BACKBONES[key]
+        (rf, of), (ri, oi) = dice0(key, "M0"), dice0(key, "img")
+        r = rf or ri
+        rows.append({"Backbone": label, "Họ": family, "Pretrain": pre, "Ảnh": size, "Tham số": r["params"] or "—",
+                     "GFLOPs/lesion": f"{r['gflops']:.0f}" if r["gflops"] else "—",
+                     "Phút (full)": f"{rf['minutes']:.0f}" if rf and rf["minutes"] else "—",
+                     "Dice chỉ backbone": f3(oi["dice"]) if oi else "chưa chạy",
+                     "Dice full": f3(of["dice"]) if of else "chưa chạy",
+                     "Δ (full − chỉ backbone)": f"{of['dice'] - oi['dice']:+.3f}" if of and oi else "—",
+                     "AUC full": f3(of["auc"]) if of else "—",
+                     "Dice test (full)": f3(tests.get(rf["name"])) if rf else "—"})
+    if "sw224" in V:
+        r = V["sw224"]["runs"][V["sw224"]["folds"][0]]
+        rows.append({"Backbone": "Swin-B (ảnh 224)", "Họ": "Transformer phân cấp", "Pretrain": "IN-22k → 1k",
+                     "Ảnh": 224, "Tham số": r["params"] or "—",
+                     "GFLOPs/lesion": f"{r['gflops']:.0f}" if r["gflops"] else "—",
+                     "Phút (full)": f"{r['minutes']:.0f}" if r["minutes"] else "—", "Dice chỉ backbone": "—",
+                     "Dice full": f3(V["sw224"]["dice_mean"]), "Δ (full − chỉ backbone)": "—",
+                     "AUC full": f3(V["sw224"]["auc_mean"]), "Dice test (full)": f3(tests.get(r["name"]))})
+    t4 = pd.DataFrame(rows)
+    md += ["## Bảng 4 · Backbone (fold 0, cùng công thức; chỉ backbone thay đổi)", "",
+           "Chỉ backbone = backbone dùng chung 2 ảnh -> nối đặc trưng -> MLP, CE + sampler q0.5, không metadata. "
+           "Full = M0 (MoE D · 3 head long-tail · metadata). Δ > 0: phương pháp có ích trên backbone đó.", "",
+           md_table(t4) if len(t4) else "_Chưa có run: chạy experiments/stage7_backbones.yaml (notebook 09)._", ""]
+
+    # Run backbone cũ của notebook 07 (Kaggle T4, batch / môi trường khác) -> sheet tham khảo
     rows = []
     for r in other:
         if not r["name"].endswith("__D__r5_nobce__clin+derm"):
@@ -256,15 +299,7 @@ def main():
                      "GFLOPs/lesion": f"{r['gflops']:.0f}" if r["gflops"] else "—",
                      "Phút": f"{r['minutes']:.0f}" if r["minutes"] else "—",
                      "Dice val": f3(o["dice"]), "AUC val": f3(o["auc"]), "Dice test": f3(tests.get(r["name"]))})
-    if "sw224" in V:
-        r = V["sw224"]["runs"][V["sw224"]["folds"][0]]
-        rows.append({"Run": r["name"], "Backbone (timm)": r["img"], "Tham số": r["params"] or "—",
-                     "GFLOPs/lesion": f"{r['gflops']:.0f}" if r["gflops"] else "—",
-                     "Phút": f"{r['minutes']:.0f}" if r["minutes"] else "—", "Dice val": f3(V["sw224"]["dice_mean"]),
-                     "AUC val": f3(V["sw224"]["auc_mean"]), "Dice test": f3(tests.get(r["name"]))})
-    t4 = pd.DataFrame(rows)
-    md += ["## Bảng 4 · Backbone và độ phân giải (cùng công thức D · r5_nobce · clin+derm, fold 0)", "",
-           md_table(t4) if len(t4) else "_Chưa có run: thêm thư mục outputs của notebook 07 vào --dirs._", ""]
+    t4k = pd.DataFrame(rows)
 
     # ---- Bảng 5
     rows = []
@@ -332,7 +367,8 @@ def main():
             thr_sheet = pd.concat([all_t, per.assign(Fit=lambda x: "fold " + x["Fold"].astype(str) + " (fit trên fold khác)")
                                    .drop(columns="Fold")], ignore_index=True)[["Fit"] + CLASSES]
         sheets = {"Đọc trước": pd.DataFrame(EXCEL_README, columns=["Sheet", "Nội dung"]),
-                  "1_SOTA": t1, "2_Modality": t2, "3_Thanh_phan": t3, "4_Backbone": t4, "5_Quyet_dinh": t5,
+                  "1_SOTA": t1, "2_Modality": t2, "3_Thanh_phan": t3, "4_Backbone": t4,
+                  "4b_Backbone_Kaggle": t4k, "5_Quyet_dinh": t5,
                   "Tom_tat_variant": pd.DataFrame(summary), "Chi_tiet_fold": pd.DataFrame(detail),
                   "Theo_lop": pd.DataFrame(per_class), "Nguong_M0": thr_sheet}
         write_excel(out / "ablation_results.xlsx", sheets)

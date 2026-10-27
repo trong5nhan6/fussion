@@ -1,0 +1,6 @@
+# ResNet-152 (60M tham số), recipe A1h của timm, chỉ pretrain ImageNet-1k. 384px như stage 7.
+base: ../default.yaml
+name: cnn_resnet152_384
+data: {img_size: 384}
+model: {backbone: resnet152.a1h_in1k, grad_checkpointing: true, dropout: 0.4}
+train: {batch_size: 8, accum_steps: 8, lr: 5.0e-5, weight_decay: 5.0e-2}

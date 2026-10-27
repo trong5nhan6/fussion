@@ -21,6 +21,7 @@ Notebook tự clone repo, tải dữ liệu từ Google Drive và train trên **
 | [`07_hires`](notebooks/07_hires.ipynb) | Ảnh 384: ViT-B, Swin-B, Swin-L, EfficientNetV2-M/L với công thức MoE D · r5_nobce | tuỳ chọn (mặc định 2) | T4 x2 |
 | [`08_ablation`](notebooks/08_ablation.ipynb) | Ablation cho paper quanh Swin-384 MoE-D: modality, gate, head long-tail, sampler, thành phần, 224/384, ngưỡng theo lớp → 5 bảng | P1: 20 · P2: 12 | T4 x2 |
 | [`08_ablation_colab_top`](notebooks/08_ablation_colab_top.ipynb) · [`_down`](notebooks/08_ablation_colab_down.ipynb) | Như 08 trên **Google Colab A100** (bf16, TF32, batch 16 × 4, 1–2 run/GPU theo VRAM), đồng bộ Google Drive, xuất **Excel**. `top` chạy danh sách từ trên xuống, `down` từ dưới lên: chạy cùng lúc trên 2 máy A100, phối hợp qua `_claims/` trên Drive, không chạy trùng | 32 | A100 × 1–2 |
+| [`09_backbones_colab_top`](notebooks/09_backbones_colab_top.ipynb) · [`_down`](notebooks/09_backbones_colab_down.ipynb) | **Bảng 4**: 8 backbone × (full phương pháp \| chỉ backbone), fold 0, cùng công thức. Thư mục Drive riêng `milk10k_backbones`; run đã có ở notebook 08 được chép lại, không train lại. Excel gộp cả run của 08 | 15 | A100 × 1–2 |
 
 **Chuẩn bị một lần:**
 1. Nén thư mục dữ liệu: `cd datasets && zip -r ../MILK10k.zip MILK10k` (khoảng 360MB). Tải lên Google Drive,
@@ -210,6 +211,14 @@ python scripts/ablation_tables.py --dirs outputs <outputs notebook 07> --test-sc
 file nộp ensemble các fold, và file nộp với **ngưỡng riêng từng lớp** (`milk10k/thresholds.py`, fit lồng nhau trên OOF).
 Mặc định ghi thêm `ablation_results.xlsx` (10 sheet: 5 bảng, tóm tắt variant, từng fold, từng lớp, ngưỡng).
 Tuỳ chọn mới: `moe.use_metadata: false` (bỏ 2 token metadata), overlay `configs/ablation/r5_nosampler.yaml`.
+
+## Backbone cho paper (stage 7, Bảng 4)
+
+`experiments/stage7_backbones.yaml`: 8 backbone (ResNet-50/152, EfficientNetV2-M, ConvNeXt-B, ViT-B, DINOv2-B 392px,
+Swin-B, Swin-L; 384px) × 2 nhánh ở fold 0, cùng lr / aug / sampler — chỉ backbone thay đổi:
+`M0` = full phương pháp, `img` = chỉ backbone (`arch: null` -> `model.name: image`, CE + sampler q0.5, không metadata).
+Bảng 4 hiện Dice của 2 nhánh và Δ = full − chỉ backbone. `--restore` chỉ chép các run thuộc lưới đang chạy, nên
+`swin_base_384__abl_M0__f0` của stage 6 được dùng lại. Notebook: `09_backbones_colab_top` / `_down` (Drive `milk10k_backbones`).
 
 ## Tuỳ chọn tiền xử lý, loss và quyết định (stage 4)
 

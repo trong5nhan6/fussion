@@ -129,6 +129,7 @@ def build_variant_jobs(exp: dict, env: str | None, only_backbones=None, extra_se
     """Lưới dạng `variants` (ablation): mỗi variant là một cấu hình đặt tên, mỗi fold là một job riêng.
 
     variant: {arch: D, overlay: r5_nobce, views: [clin, derm], set: [...], folds: [0, ...], config: <baseline>}
+    arch: null -> không dùng MoE (model.name của config backbone, mặc định `image`: chỉ backbone + MLP).
     Tên run: <backbone>__abl_<variant>__f<fold>[__<hậu tố>]. `folds` (CLI) ghi đè folds của từng variant.
     Thứ tự job: theo fold trước (mọi variant fold 0, rồi fold 1, ...) để có kết quả fold 0 sớm nhất.
     """
@@ -148,7 +149,8 @@ def build_variant_jobs(exp: dict, env: str | None, only_backbones=None, extra_se
                 plan.append((int(fold), vname, v))
         plan.sort(key=lambda t: t[0])
         for fold, vname, v in plan:
-            configs = [v.get("config", entry["config"]), f"configs/moe/{v.get('arch', 'D')}.yaml",
+            arch = v.get("arch", "D")
+            configs = [v.get("config", entry["config"]), *([f"configs/moe/{arch}.yaml"] if arch else []),
                        *([_overlay_path(v["overlay"])] if v.get("overlay") else []), *([env] if env else [])]
             views = v.get("views", ["clin", "derm"])
             sets = [*(exp.get("set") or []), *(entry.get("set") or []), *(v.get("set") or []),
@@ -189,8 +191,9 @@ def is_done(run_dir: Path) -> bool:
     return (run_dir / "metrics.json").exists() and (run_dir / "submission.csv").exists()
 
 
-def restore(sources, out_dir: Path) -> int:
-    """Chép các run đã hoàn tất từ phiên trước vào out_dir (bỏ qua checkpoint .pt)."""
+def restore(sources, out_dir: Path, names=None) -> int:
+    """Chép các run đã hoàn tất từ phiên trước vào out_dir (bỏ qua checkpoint .pt).
+    names: chỉ chép các run có tên trong tập này (vd chỉ các run của lưới đang chạy)."""
     n = 0
     for src in sources:
         src = Path(src)
@@ -198,6 +201,8 @@ def restore(sources, out_dir: Path) -> int:
             print(f"[restore] KHÔNG thấy {src} — bỏ qua")
             continue
         for run in sorted(p for p in src.iterdir() if p.is_dir() and is_done(p)):
+            if names is not None and run.name not in names:
+                continue
             dest = out_dir / run.name
             if is_done(dest):
                 continue
@@ -405,7 +410,7 @@ def main():
     out_dir = resolve_path("outputs")
     out_dir.mkdir(exist_ok=True)
     if args.restore:
-        print(f"Khôi phục {restore(args.restore, out_dir)} run từ phiên trước")
+        print(f"Khôi phục {restore(args.restore, out_dir, {j.name for j in jobs})} run từ phiên trước")
 
     for j in jobs:
         if is_done(out_dir / j.name):

@@ -219,6 +219,7 @@ def test_restore_and_done(tmp_path):
             (prev / name / f).parent.mkdir(parents=True, exist_ok=True)
             (prev / name / f).write_text("{}")
     out.mkdir()
+    assert run_grid.restore([prev], out, names={"x__t__clin"}) == 0      # chỉ chép run thuộc lưới đang chạy
     assert run_grid.restore([prev], out) == 1
     assert run_grid.is_done(out / "a__t__clin") and not (out / "a__t__clin" / "fold0" / "best.pt").exists()
     assert not (out / "b__t__clin").exists()
@@ -472,6 +473,33 @@ def test_stage6_variant_jobs_one_factor_and_folds():
     assert [j.name for j in only] == ["swin_base_384__abl_E__f1", "swin_base_384__abl_E__f2"]
 
 
+def test_stage7_backbone_jobs_same_recipe():
+    exp = _exp("stage7_backbones.yaml")
+    jobs = run_grid.build_variant_jobs(exp, "configs/env/colab_a100.yaml")
+    assert len(jobs) == 16 and jobs[0].name == "swin_large_384__abl_M0__f0"
+    assert "swin_base_384__abl_M0__f0" in [j.name for j in jobs]           # trùng tên stage 6 -> được dùng lại
+    cfgs = {j.name: load_config([ROOT / c for c in j.configs], j.sets) for j in jobs}
+    for name, cfg in cfgs.items():
+        full = "__abl_M0__" in name
+        assert cfg["model"]["name"] == ("moe" if full else "image"), name
+        assert cfg["train"]["lr"] == 5e-5 and cfg["train"]["sampler_q"] == 0.5 and cfg["model"]["dropout"] == 0.4
+        assert cfg["model"]["drop_path_rate"] == 0.1 and cfg["train"]["backbone_lr_mult"] == 1.0
+        assert cfg["train"]["batch_size"] * cfg["train"]["accum_steps"] == 64 and cfg["train"]["folds"] == [0]
+    assert cfgs["dinov2_base_392__abl_img__f0"]["data"]["img_size"] == 392
+    assert cfgs["dinov2_base_392__abl_M0__f0"]["model"].get("trainable_blocks") is None
+    assert cfgs["swin_large_384__abl_M0__f0"]["train"]["batch_size"] == 8
+    assert cfgs["resnet50_384__abl_img__f0"]["data"]["img_size"] == 384
+
+
+@pytest.mark.parametrize("cfg_name", ["cnn_resnet50_384", "cnn_convnext_base_384", "dinov2_base_392"])
+def test_stage7_new_backbones_build(cfg_name):
+    cfg = load_config(ROOT / f"configs/baselines/{cfg_name}.yaml", ["model.pretrained=false", "data.img_size=112"])
+    m = build_model(cfg).eval()
+    batch = {"images": {v: torch.randn(1, 3, 112, 112) for v in ["clin", "derm"]}, "meta": torch.randn(1, 34)}
+    with torch.no_grad():
+        assert m(batch).shape == (1, NUM_CLASSES)
+
+
 def test_class_thresholds_monotone_mapping():
     from milk10k.thresholds import apply_thresholds, fit_thresholds, nested_threshold_scores
     rng = np.random.default_rng(0)
@@ -515,6 +543,8 @@ def test_ablation_tables_end_to_end(tmp_path):
     for v, folds in [("M0", [0, 1, 2]), ("CD", [0, 1, 2]), ("E", [0])]:
         for f in folds:
             _fake_run(tmp_path / "runs" / f"swin_base_384__abl_{v}__f{f}", f, rng, test_ids)
+    for name in ["swin_base_384__abl_img__f0", "resnet50_384__abl_M0__f0", "resnet50_384__abl_img__f0"]:
+        _fake_run(tmp_path / "runs" / name, 0, rng, test_ids)               # stage 7: nhiều backbone
     out = tmp_path / "tables"
     r = subprocess.run([sys.executable, str(ROOT / "scripts/ablation_tables.py"), "--dirs", str(tmp_path / "runs"),
                         "--out", str(out)], capture_output=True, text=True, encoding="utf-8",
@@ -528,9 +558,11 @@ def test_ablation_tables_end_to_end(tmp_path):
     assert (out / "thresholds_M0.csv").exists() and len(pd.read_csv(out / "table5_decision.csv")) == 3
     xl = pd.ExcelFile(out / "ablation_results.xlsx")
     assert {"1_SOTA", "3_Thanh_phan", "Tom_tat_variant", "Chi_tiet_fold", "Theo_lop", "Nguong_M0"} <= set(xl.sheet_names)
+    t4 = pd.read_excel(xl, "4_Backbone")
+    assert list(t4["Backbone"]) == ["ResNet-50", "Swin-B"] and t4["Δ (full − chỉ backbone)"].astype(str).str.match(r"[+-]?0\.").all()
     summ = pd.read_excel(xl, "Tom_tat_variant")
-    assert list(summ["Variant"]) == ["M0", "CD", "E"] and summ.loc[1, "Số fold"] == 3
-    assert len(pd.read_excel(xl, "Chi_tiet_fold")) == 7 and len(pd.read_excel(xl, "Theo_lop")) == 3 * NUM_CLASSES
+    assert list(summ["Variant"]) == ["M0", "CD", "E", "img"] and summ.loc[1, "Số fold"] == 3
+    assert len(pd.read_excel(xl, "Chi_tiet_fold")) == 8 and len(pd.read_excel(xl, "Theo_lop")) == 4 * NUM_CLASSES
 
 
 def test_amp_dtype_and_colab_env():

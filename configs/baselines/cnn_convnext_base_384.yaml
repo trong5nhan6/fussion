@@ -1,0 +1,6 @@
+# ConvNeXt-Base (89M tham số), pretrain ImageNet-22k -> fine-tune 1k ở 384 (cùng công thức pretrain với Swin-B-384).
+base: ../default.yaml
+name: cnn_convnext_base_384
+data: {img_size: 384}
+model: {backbone: convnext_base.fb_in22k_ft_in1k_384, grad_checkpointing: true, dropout: 0.4}
+train: {batch_size: 8, accum_steps: 8, lr: 5.0e-5, weight_decay: 5.0e-2}

@@ -1,0 +1,7 @@
+# ResNet-50 (25.6M tham số), recipe A1 của timm (ResNet strikes back), chỉ pretrain ImageNet-1k.
+# 384px để so sánh cùng độ phân giải với Swin/ViT-384 (stage 7).
+base: ../default.yaml
+name: cnn_resnet50_384
+data: {img_size: 384}
+model: {backbone: resnet50.a1_in1k, grad_checkpointing: true, dropout: 0.4}
+train: {batch_size: 8, accum_steps: 8, lr: 5.0e-5, weight_decay: 5.0e-2}

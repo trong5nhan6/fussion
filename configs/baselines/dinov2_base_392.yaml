@@ -1,0 +1,8 @@
+# DINOv2-Base/14 (86M, tự giám sát trên LVD-142M), fine-tune TOÀN BỘ như mọi backbone ở stage 7.
+# Ảnh phải chia hết cho patch 14: 392 = 28 x 14 (gần 384 nhất); position embedding được nội suy từ 518.
+# Khác dinov2_base.yaml (concat_mlp, chỉ train 4 block cuối): ở đây model và recipe giống hệt các backbone khác.
+base: ../default.yaml
+name: dinov2_base_392
+data: {img_size: 392}
+model: {backbone: vit_base_patch14_dinov2.lvd142m, grad_checkpointing: true, dropout: 0.4}
+train: {batch_size: 8, accum_steps: 8, lr: 5.0e-5, weight_decay: 5.0e-2}
