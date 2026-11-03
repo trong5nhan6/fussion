@@ -1,0 +1,26 @@
+# Stage 8 — bài TAIMMA 2027: MGSP (metadata-guided spatial pooling), mô hình đơn giản 2 ảnh + metadata.
+# Tách khỏi bài Q1: KHÔNG dùng MoE / gate / head long-tail / modality dropout / 384px.
+# Chung: ViT-B/16 224px · overlay r5_nobce (CE không trọng số + sampler q0.5, squash, aug mạnh, backbone lr x1.0,
+#        drop path 0.1) · lr 5e-5 · dropout 0.4 · 20 epoch · patience 5 · batch hiệu dụng 64.
+# Tên run: vit_base__abl_<variant>__f<fold>. Bảng: python scripts/mgsp_tables.py --dirs outputs
+#
+#   P1 (5 fold, Bảng 2): R1 chỉ ảnh · R2 nối metadata · R4 MGSP đầy đủ
+#   P2 (fold 0, Bảng 3): R3 không query metadata · R5 attention chỉ derm · R6 bỏ CLS · R7 gộp 2 ảnh · R8 4+4 query
+# Thứ tự chạy: mọi variant fold 0 trước (có Bảng 3 + so sánh R4 vs R2 sớm nhất), rồi fold 1..4 của P1.
+name: stage8_mgsp
+backbones:
+  vit_base: configs/baselines/vit_base.yaml
+set: [train.lr=5.0e-5, model.dropout=0.4]
+
+variants:
+  # ---- Bảng 2 (5 fold)
+  R1: {arch: null, overlay: r5_nobce, set: [model.name=concat_mlp], folds: [0, 1, 2, 3, 4], tier: P1}
+  R2: {arch: null, overlay: r5_nobce, set: [model.name=concat_mlp, model.concat_meta=true], folds: [0, 1, 2, 3, 4], tier: P1}
+  # R4 giữ checkpoint (notebook chép fold 0 lên Drive) để vẽ heatmap và làm counterfactual metadata
+  R4: {arch: null, overlay: r5_nobce, set: [model.name=mgsp, keep_checkpoints=true], folds: [0, 1, 2, 3, 4], tier: P1}
+  # ---- Bảng 3 (fold 0): mỗi variant đổi đúng 1 yếu tố so với R4
+  R3: {arch: null, overlay: r5_nobce, set: [model.name=mgsp, mgsp.k_meta=0, mgsp.k_static=4], tier: P2}
+  R5: {arch: null, overlay: r5_nobce, set: [model.name=mgsp, "mgsp.attn_views=[derm]"], tier: P2}
+  R6: {arch: null, overlay: r5_nobce, set: [model.name=mgsp, mgsp.use_cls=false], tier: P2}
+  R7: {arch: null, overlay: r5_nobce, set: [model.name=mgsp, mgsp.joint=true], tier: P2}
+  R8: {arch: null, overlay: r5_nobce, set: [model.name=mgsp, mgsp.k_meta=4, mgsp.k_static=4], tier: P2}

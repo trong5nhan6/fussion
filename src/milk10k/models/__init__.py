@@ -13,6 +13,7 @@ Tuỳ chọn (engine tự gọi nếu có):
 """
 from .concat_mlp import ConcatMLP
 from .image_baseline import ImageBaseline
+from .mgsp import MGSP
 from .moe import MultimodalMoE
 
 
@@ -42,10 +43,19 @@ def _build_concat_mlp(cfg: dict, meta_dim: int):
                      trainable_blocks=m.get("trainable_blocks"))
 
 
+def _build_mgsp(cfg: dict, meta_dim: int):
+    m = cfg["model"]
+    return MGSP(m["backbone"], m["views"], meta_dim, pretrained=m.get("pretrained", True),
+                img_size=cfg["data"]["img_size"], grad_checkpointing=m.get("grad_checkpointing", False),
+                drop_path_rate=m.get("drop_path_rate", 0.0), trainable_blocks=m.get("trainable_blocks"),
+                hidden=m.get("mlp_hidden", 512), dropout=m.get("dropout", 0.3), **cfg.get("mgsp", {}))
+
+
 MODELS = {
     "image": _build_image,
     "moe": _build_moe,      # multimodal MoE, hướng A/B/C/D/E (configs/moe/)
     "concat_mlp": _build_concat_mlp,  # nối CLS các ảnh (+ metadata tuỳ chọn) -> MLP 2 lớp
+    "mgsp": _build_mgsp,    # metadata-guided spatial pooling (bài TAIMMA, configs: khối mgsp)
 }
 
 

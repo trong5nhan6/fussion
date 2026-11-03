@@ -48,6 +48,19 @@ moe:
   dropout: 0.1
   fusion_lr_mult: 1.0    # lr của phần MoE mới khởi tạo = train.lr * hệ số này
 
+# MGSP — metadata-guided spatial pooling (model.name: mgsp, src/milk10k/models/mgsp.py, bài TAIMMA)
+mgsp:
+  k_meta: 2              # số query sinh từ metadata (0 = chỉ query tĩnh)
+  k_static: 2            # số query học được, giống nhau cho mọi mẫu
+  n_heads: 8             # head của cross-attention (num_features phải chia hết)
+  attn_views: null       # null = mọi ảnh trong model.views qua attention | vd [derm]: clin chỉ dùng CLS
+  joint: false           # true: gộp patch các ảnh thành 1 chuỗi + view embedding, 1 softmax chung
+  use_cls: true          # giữ CLS của ảnh đã qua attention trong z
+  meta_in_z: true        # nối vector metadata thô vào z
+  meta_hidden: 256       # lớp ẩn của MLP sinh query metadata
+  ffn_mult: 2            # FFN sau attention: D -> D*ffn_mult -> D
+  attn_dropout: 0.1
+
 # Xử lý mất cân bằng — xem src/milk10k/losses.py và configs/imbalance/
 loss:
   name: ce               # ce | focal | logit_adjusted | bce (sigmoid độc lập từng lớp)

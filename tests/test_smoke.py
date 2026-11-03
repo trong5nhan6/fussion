@@ -629,3 +629,46 @@ def test_grid_requeues_busy_run_until_claim_goes_stale(tmp_path, monkeypatch):
 
 
 import time  # noqa: E402
+
+
+MGSP_VARIANTS = [[], ["mgsp.k_meta=0", "mgsp.k_static=4"], ["mgsp.attn_views=[derm]"], ["mgsp.use_cls=false"],
+                 ["mgsp.joint=true"], ["mgsp.k_meta=4", "mgsp.k_static=4"]]
+
+
+@pytest.mark.parametrize("backbone", ["vit_tiny_patch16_224", "swin_tiny_patch4_window7_224", "convnext_atto"])
+@pytest.mark.parametrize("extra", MGSP_VARIANTS, ids=lambda e: ",".join(e) or "full")
+def test_mgsp_forward(backbone, extra):
+    cfg = load_config(ROOT / "configs" / "default.yaml",
+                      ["model.pretrained=false", "model.name=mgsp", f"model.backbone={backbone}", "data.img_size=224",
+                       "mgsp.n_heads=4", *extra])
+    model = build_model(cfg, meta_dim=34).eval()
+    batch = {"images": {v: torch.randn(2, 3, 224, 224) for v in ("clin", "derm")}, "meta": torch.randn(2, 34)}
+    with torch.no_grad():
+        assert model(batch).shape == (2, NUM_CLASSES)
+    for k, t in model.last_explain.items():                  # 1 số mỗi mẫu -> cột oof.csv
+        assert t.shape == (2,) and torch.isfinite(t).all(), k
+    for w in model.last_attn.values():                        # bản đồ attention: mỗi query cộng lại bằng 1
+        assert torch.allclose(w.sum(-1), torch.ones_like(w.sum(-1)), atol=1e-4)
+    if "mgsp.joint=true" in extra:
+        assert torch.allclose(model.last_explain["mass_clin"] + model.last_explain["mass_derm"], torch.ones(2), atol=1e-4)
+    groups = model.param_groups(1e-4, 0.5)
+    assert sum(len(g["params"]) for g in groups) == len(list(model.parameters()))
+
+
+def test_stage8_grid_configs():
+    """Mọi run của lưới stage 8 tạo được mô hình đúng loại (không tải trọng số)."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import yaml
+    from run_grid import build_variant_jobs
+    from milk10k.utils import resolve_path
+    exp = yaml.safe_load(open(ROOT / "experiments" / "stage8_mgsp.yaml", encoding="utf-8"))
+    jobs = build_variant_jobs(exp, "configs/env/colab_a100.yaml")
+    assert len(jobs) == 3 * 5 + 5
+    for j in jobs:
+        if not j.name.endswith("__f0"):
+            continue
+        cfg = load_config([resolve_path(c) for c in j.configs], [*j.sets, "model.pretrained=false"])
+        assert cfg["data"]["img_size"] == 224 and cfg["train"]["sampler_q"] == 0.5
+        model = build_model(cfg, meta_dim=34)
+        want = {"R1": "ConcatMLP", "R2": "ConcatMLP"}.get(j.extra["variant"], "MGSP")
+        assert type(model).__name__ == want, j.name
