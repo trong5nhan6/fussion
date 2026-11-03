@@ -672,3 +672,76 @@ def test_stage8_grid_configs():
         model = build_model(cfg, meta_dim=34)
         want = {"R1": "ConcatMLP", "R2": "ConcatMLP"}.get(j.extra["variant"], "MGSP")
         assert type(model).__name__ == want, j.name
+
+
+@pytest.mark.parametrize("backbone", ["vit_tiny_patch16_224", "swin_tiny_patch4_window7_224"])
+def test_hmf_forward_loss_backward(backbone):
+    """HMF: forward/loss/backward chạy, mọi tham số mới nhận gradient, đầu ra là log-xác suất hợp lệ."""
+    cfg = load_config([ROOT / "configs" / "default.yaml", ROOT / "configs" / "moe" / "HMF.yaml"],
+                      ["model.pretrained=false", f"model.backbone={backbone}", "data.img_size=224",
+                       "moe.d_model=64", "hmf.attn_heads=4", "model.layer_decay=0.75"])
+    model = build_model(cfg, meta_dim=34).train()
+    model.set_class_prior(torch.full((NUM_CLASSES,), 1.0 / NUM_CLASSES))
+    batch = {"images": {v: torch.randn(3, 3, 224, 224) for v in ("clin", "derm")}, "meta": torch.randn(3, 34)}
+    out = model(batch)
+    assert out.shape == (3, NUM_CLASSES)
+    assert torch.allclose(out.softmax(-1).sum(-1), torch.ones(3), atol=1e-4)
+    assert model.tokens.modalities == ["clin", "derm", "demo", "monet", "q_clin", "q_derm"]
+    loss = model.compute_loss(out, torch.tensor([0, 3, 9]), torch.nn.CrossEntropyLoss())
+    loss.backward()
+    for name in ("early", "pool", "q_proj", "meta_query"):
+        mod = getattr(model, name)
+        assert all(p.grad is not None for p in mod.parameters()), name
+    assert {"gate_q_clin", "ent_clin", "ent_derm"} <= set(model.last_explain)
+    groups = model.param_groups(1e-4, 1.0)
+    assert sum(len(g["params"]) for g in groups) == len(list(model.parameters()))
+    if backbone.startswith("vit"):                              # layer decay: lr giảm dần theo block
+        lrs = [g["lr"] for g in groups[:-1]]
+        assert lrs == sorted(lrs) and lrs[0] < lrs[-1] <= 1e-4
+
+
+def test_derm_backbones_arch_and_conversion():
+    """PanDerm/DermLIP dựng được kiến trúc ViT-B/16 (không tải trọng số); chuyển khoá PanDerm đúng định dạng timm."""
+    from milk10k.models.derm_backbones import convert_panderm, create_dermlip, create_panderm
+    enc = create_panderm(224, pretrained=False)
+    fake = {}
+    for k, v in enc.state_dict().items():                       # dựng checkpoint giả theo khoá PanDerm gốc
+        k2 = k.replace(".ls1.gamma", ".gamma_1").replace(".ls2.gamma", ".gamma_2")
+        if k2.endswith("attn.qkv.bias"):
+            d = v.shape[0] // 3
+            fake[k2.replace("qkv.bias", "q_bias")], fake[k2.replace("qkv.bias", "v_bias")] = v[:d], v[2 * d:]
+        else:
+            fake[k2] = v
+    fake["teacher.x"] = torch.zeros(1)
+    conv = convert_panderm(fake)
+    missing, unexpected = enc.load_state_dict(conv, strict=False)
+    assert not missing and not unexpected
+    assert torch.equal(conv["blocks.0.attn.qkv.bias"][768:1536], torch.zeros(768))   # k không có bias
+    for create in (create_panderm, create_dermlip):
+        e = create(224, pretrained=False)
+        assert e.num_features == 768 and e.forward_features(torch.randn(1, 3, 224, 224)).shape == (1, 197, 768)
+
+
+def test_stage9_grid_configs():
+    """Lưới stage 9: 7 cặp backbone x variant x 5 fold, đúng loại mô hình, đúng sampler / layer decay."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import yaml
+    from run_grid import build_variant_jobs
+    from milk10k.utils import resolve_path
+    exp = yaml.safe_load(open(ROOT / "experiments" / "stage9_pretrain_hybrid.yaml", encoding="utf-8"))
+    jobs = build_variant_jobs(exp, "configs/env/colab_a100.yaml")
+    assert len(jobs) == 7 * 5
+    assert all(j.name.endswith("__f0") for j in jobs[:7])          # fold 0 của mọi cặp chạy trước
+    pairs = {j.name.rsplit("__f", 1)[0] for j in jobs}
+    assert pairs == {"vit_base__abl_D", "panderm_base__abl_D", "dermlip_vit_b16__abl_D", "panderm_base__abl_HMF",
+                     "dermlip_vit_b16__abl_HMF", "swin_base_384__abl_HMF", "swin_base_384__abl_q1"}
+    for j in jobs[:7]:
+        cfg = load_config([resolve_path(c) for c in j.configs], [*j.sets, "model.pretrained=false"])
+        bb = j.name.split("__")[0]
+        assert cfg["moe"]["d_model"] == 256 and cfg["model"]["arch"] == "D"
+        assert cfg["train"]["sampler_q"] == (1.0 if j.extra["variant"] == "q1" else 0.5)
+        assert cfg["model"].get("layer_decay") == (None if bb == "swin_base_384" else 0.75)
+        assert cfg["data"]["img_size"] == (384 if bb == "swin_base_384" else 224)
+        model = build_model(cfg, meta_dim=34)
+        want = "HybridMetaFusion" if j.extra["variant"] == "HMF" else "MultimodalMoE"
+        assert type(model).__name__ == want, j.name

@@ -1,0 +1,7 @@
+# PanDerm-Base (ViT-B/16, pretrain MAE + CLIP trên ~2 triệu ảnh da liễu; src/milk10k/models/derm_backbones.py).
+# Cùng công thức ViT-B/224 như vit_base.yaml. Checkpoint tự tải bằng gdown vào $MILK10K_WEIGHTS (mặc định weights/).
+base: ../default.yaml
+name: panderm_base
+data: {img_size: 224}
+model: {backbone: panderm_base, grad_checkpointing: true, dropout: 0.4}
+train: {batch_size: 4, accum_steps: 8, lr: 5.0e-5, backbone_lr_mult: 0.2, weight_decay: 5.0e-2}

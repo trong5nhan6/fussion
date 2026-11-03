@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from .. import NUM_CLASSES
-from .image_baseline import check_views, create_encoder
+from .image_baseline import check_views, create_encoder, encoder_param_groups
 
 DEMO_DIM = 20   # tuổi(2) + giới(3) + skin tone(7) + vị trí(8), xem data/metadata.py
 MONET_DIM = 14  # 7 khái niệm x 2 ảnh
@@ -40,11 +40,13 @@ class TokenEncoder(nn.Module):
     """
 
     def __init__(self, backbone, views, pretrained, img_size, d, grad_checkpointing, modality_dropout, dropout,
-                 drop_path_rate=0.0, trainable_blocks=None, use_metadata=True):
+                 drop_path_rate=0.0, trainable_blocks=None, use_metadata=True, extra_modalities=()):
         super().__init__()
         self.views = check_views(views)
         self.use_metadata = bool(use_metadata)
-        self.modalities = self.views + (["demo", "monet"] if self.use_metadata else [])
+        # extra_modalities: token d chiều do mô hình con tự tính và truyền vào forward(extra=...) (vd HMF: q_clin, q_derm)
+        self.extra = list(extra_modalities)
+        self.modalities = self.views + (["demo", "monet"] if self.use_metadata else []) + self.extra
         self.encoder = create_encoder(backbone, pretrained, img_size, grad_checkpointing, drop_path_rate,
                                       trainable_blocks)
         feat = self.encoder.num_features
@@ -64,11 +66,18 @@ class TokenEncoder(nn.Module):
         nn.init.trunc_normal_(self.missing, std=0.02)
         self.p_drop = modality_dropout
 
-    def forward(self, batch):
+    def forward(self, batch, feats=None, extra=None):
+        """feats: {view: đặc trưng gộp [B, D]} đã tính sẵn (HMF chạy backbone 1 lần lấy cả patch) — None: tự chạy.
+        extra: list token [B, d] theo thứ tự self.extra."""
         meta = batch["meta"]
-        toks = [self.img_proj(self.encoder(batch["images"][v])) for v in self.views]
+        feats = feats or {v: self.encoder(batch["images"][v]) for v in self.views}
+        toks = [self.img_proj(feats[v]) for v in self.views]
         if self.use_metadata:
             toks += [self.demo(meta[:, :DEMO_DIM]), self.monet(meta[:, DEMO_DIM:DEMO_DIM + MONET_DIM])]
+        if self.extra:
+            if extra is None or len(extra) != len(self.extra):
+                raise ValueError(f"TokenEncoder cần {len(self.extra)} token extra {self.extra}")
+            toks += [t.to(toks[0].dtype) for t in extra]
         x = torch.stack(toks, dim=1)                      # [B, M, d]
         if self.training and self.p_drop > 0:
             B, M, _ = x.shape
@@ -189,14 +198,16 @@ class MultimodalMoE(nn.Module):
                  d_model=None, n_experts=4, top_k=2, n_blocks=2, n_heads=4, balance_alpha=0.01, aux_weight=0.25,
                  modality_dropout=0.15, lt_taus=(0.0, 0.5, 1.0), dropout=0.1, head_dropout=0.3,
                  fusion_lr_mult=1.0, drop_path_rate=0.0, trainable_blocks=None, use_metadata=True,
-                 num_classes=NUM_CLASSES):
+                 layer_decay=None, extra_modalities=(), num_classes=NUM_CLASSES):
         super().__init__()
         if arch not in ARCHS:
             raise ValueError(f"model.arch phải là một trong {list(ARCHS)}, nhận {arch!r}")
         self.arch = arch
+        self.layer_decay = layer_decay
         fusion, self.longtail = ARCHS[arch]
         self.tokens = TokenEncoder(backbone, views, pretrained, img_size, d_model, grad_checkpointing,
-                                   modality_dropout, dropout, drop_path_rate, trainable_blocks, use_metadata)
+                                   modality_dropout, dropout, drop_path_rate, trainable_blocks, use_metadata,
+                                   extra_modalities)
         self.uses_metadata = self.tokens.use_metadata
         M = len(self.tokens.modalities)
         d_model = self.tokens.d                           # = số chiều backbone khi không chiếu
@@ -229,19 +240,24 @@ class MultimodalMoE(nn.Module):
         if self.longtail:
             self.head.log_prior.copy_(prior.clamp_min(1e-12).log().to(self.head.log_prior))
 
-    def compute_loss(self, logits, y, criterion):
+    def main_loss(self, logits, y, criterion):
+        """Loss của head chính (nhánh token MoE)."""
         if self.longtail:   # mỗi head: CE(logit + τ·log π) — τ = 0 là CE thường
             lp = self.head.log_prior
             main = sum(F.cross_entropy(l.float() + t * lp, y) for l, t in zip(self._lt_logits, self.head.taus))
-            main = main / len(self._lt_logits)
-            aux = sum(F.cross_entropy(a.float(), y) for a in self._aux_logits) / len(self._aux_logits)
-        else:
-            main = criterion(logits, y)
-            aux = sum(criterion(a, y) for a in self._aux_logits) / len(self._aux_logits)
-        loss = main + self.aux_weight * aux
+            return main / len(self._lt_logits)
+        return criterion(logits, y)
+
+    def side_loss(self, y, criterion):
+        """Head phụ từng token (deep supervision) + load-balancing."""
+        ce = (lambda a: F.cross_entropy(a.float(), y)) if self.longtail else (lambda a: criterion(a, y))
+        loss = self.aux_weight * sum(ce(a) for a in self._aux_logits) / len(self._aux_logits)
         if self.fusion.aux_loss is not None:
             loss = loss + self.balance_alpha * self.fusion.aux_loss
         return loss
+
+    def compute_loss(self, logits, y, criterion):
+        return self.main_loss(logits, y, criterion) + self.side_loss(y, criterion)
 
     def _record_explain(self):
         """Lưu thông tin giải thích của lần forward gần nhất (engine ghi vào oof.csv)."""
@@ -264,7 +280,9 @@ class MultimodalMoE(nn.Module):
         enc_ids = {id(p) for p in enc}
         rest = [p for p in self.parameters() if id(p) not in enc_ids]
         # phần mới khởi tạo (token MLP, fusion, head): lr * fusion_lr_mult; backbone pretrained: lr * backbone_lr_mult
-        return [{"params": enc, "lr": lr * backbone_lr_mult}, {"params": rest, "lr": lr * self.fusion_lr_mult}]
+        # (model.layer_decay: thêm lr giảm dần theo block của backbone ViT)
+        return [*encoder_param_groups(self.tokens.encoder, lr * backbone_lr_mult, self.layer_decay),
+                {"params": rest, "lr": lr * self.fusion_lr_mult}]
 
     def normalization(self):
         cfg = self.tokens.encoder.pretrained_cfg

@@ -33,7 +33,7 @@ from milk10k.utils import PROJECT_ROOT, load_json, resolve_path
 
 # Tham số in ra khi --dry-run để kiểm tra cấu hình thực tế (sau khi gộp config + overlay + env + --set)
 SHOW_KEYS = ["model.name", "model.arch", "model.views", "moe.use_metadata", "moe.lt_taus", "moe.aux_weight",
-             "moe.modality_dropout", "moe.d_model", "data.img_size", "data.resize", "data.aug", "model.drop_path_rate", "train.batch_size", "train.accum_steps", "train.epochs", "train.patience", "train.lr",
+             "moe.modality_dropout", "moe.d_model", "model.layer_decay", "data.img_size", "data.resize", "data.aug", "model.drop_path_rate", "train.batch_size", "train.accum_steps", "train.epochs", "train.patience", "train.lr",
              "train.backbone_lr_mult", "train.weight_decay", "train.folds", "model.grad_checkpointing",
              "model.dropout", "loss.name", "loss.class_weight", "train.sampler_q", "crt.enabled",
              "predict.tta", "predict.postprocess"]
@@ -128,7 +128,8 @@ def build_variant_jobs(exp: dict, env: str | None, only_backbones=None, extra_se
                        only_variants=None, folds=None) -> list[Job]:
     """Lưới dạng `variants` (ablation): mỗi variant là một cấu hình đặt tên, mỗi fold là một job riêng.
 
-    variant: {arch: D, overlay: r5_nobce, views: [clin, derm], set: [...], folds: [0, ...], config: <baseline>}
+    variant: {arch: D, overlay: r5_nobce, views: [clin, derm], set: [...], folds: [0, ...], config: <baseline>,
+              backbones: [<khoá backbone>...] (tuỳ chọn: chỉ chạy variant trên các backbone này)}
     arch: null -> không dùng MoE (model.name của config backbone, mặc định `image`: chỉ backbone + MLP).
     Tên run: <backbone>__abl_<variant>__f<fold>[__<hậu tố>]. `folds` (CLI) ghi đè folds của từng variant.
     Thứ tự job: theo fold trước (mọi variant fold 0, rồi fold 1, ...) để có kết quả fold 0 sớm nhất.
@@ -136,27 +137,29 @@ def build_variant_jobs(exp: dict, env: str | None, only_backbones=None, extra_se
     variants = exp["variants"]
     _check("Backbone", only_backbones, exp["backbones"], exp["name"])
     _check("Variant", only_variants, variants, exp["name"])
-    jobs = []
+    plan = []
     for key, entry in exp["backbones"].items():
         if only_backbones and key not in only_backbones:
             continue
         entry = {"config": entry} if isinstance(entry, str) else entry
-        plan = []
         for vname, v in variants.items():
             if only_variants and vname not in only_variants:
                 continue
+            if v.get("backbones") and key not in v["backbones"]:   # variant chỉ chạy trên các backbone này
+                continue
             for fold in (folds if folds is not None else v.get("folds", [0])):
-                plan.append((int(fold), vname, v))
-        plan.sort(key=lambda t: t[0])
-        for fold, vname, v in plan:
-            arch = v.get("arch", "D")
-            configs = [v.get("config", entry["config"]), *([f"configs/moe/{arch}.yaml"] if arch else []),
-                       *([_overlay_path(v["overlay"])] if v.get("overlay") else []), *([env] if env else [])]
-            views = v.get("views", ["clin", "derm"])
-            sets = [*(exp.get("set") or []), *(entry.get("set") or []), *(v.get("set") or []),
-                    f"model.views=[{','.join(views)}]", f"train.folds=[{fold}]", *extra_set]
-            name = f"{key}__abl_{vname}__f{fold}" + (f"__{suffix}" if suffix else "")
-            jobs.append(Job(name, configs, sets, extra={"col": f"{key} {vname}", "variant": vname, "fold": fold}))
+                plan.append((int(fold), key, entry, vname, v))
+    plan.sort(key=lambda t: t[0])        # mọi backbone x variant fold 0 trước, rồi fold 1, ...
+    jobs = []
+    for fold, key, entry, vname, v in plan:
+        arch = v.get("arch", "D")
+        configs = [v.get("config", entry["config"]), *([f"configs/moe/{arch}.yaml"] if arch else []),
+                   *([_overlay_path(v["overlay"])] if v.get("overlay") else []), *([env] if env else [])]
+        views = v.get("views", ["clin", "derm"])
+        sets = [*(exp.get("set") or []), *(entry.get("set") or []), *(v.get("set") or []),
+                f"model.views=[{','.join(views)}]", f"train.folds=[{fold}]", *extra_set]
+        name = f"{key}__abl_{vname}__f{fold}" + (f"__{suffix}" if suffix else "")
+        jobs.append(Job(name, configs, sets, extra={"col": f"{key} {vname}", "variant": vname, "fold": fold}))
     return jobs
 
 

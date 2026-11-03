@@ -1,0 +1,3 @@
+# HMF — Hybrid Metadata Fusion = MoE hướng D + nhánh nối sớm [f‖meta]->MLP + token MGSP (src/milk10k/models/hmf.py).
+# Tham số phần mới: khối `hmf` trong default.yaml. Truyền SAU config backbone, như A–E.
+model: {name: hmf, arch: D}

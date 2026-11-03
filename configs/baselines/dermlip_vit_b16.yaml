@@ -1,0 +1,7 @@
+# DermLIP ViT-B/16 (CLIP trên Derm1M; nhánh ảnh nạp vào timm, src/milk10k/models/derm_backbones.py).
+# Repo HF gated: chấp nhận điều khoản tại huggingface.co/redlessone/DermLIP_ViT-B-16 + biến môi trường HF_TOKEN.
+base: ../default.yaml
+name: dermlip_vit_b16
+data: {img_size: 224}
+model: {backbone: dermlip_vit_b16, grad_checkpointing: true, dropout: 0.4}
+train: {batch_size: 4, accum_steps: 8, lr: 5.0e-5, backbone_lr_mult: 0.2, weight_decay: 5.0e-2}

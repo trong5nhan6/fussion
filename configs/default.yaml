@@ -31,6 +31,7 @@ model:
   trainable_blocks: null # null hoặc N = tổng số block (ViT/DINOv2 12, Swin/ConvNeXt/ResNet 4): fine-tune toàn bộ
                          #   N nhỏ hơn: chỉ N block cuối + norm cuối, phần còn lại đóng băng
   grad_checkpointing: false  # true: giảm VRAM (~40-60%), train chậm hơn ~20-30%
+  layer_decay: null      # vd 0.75 (chỉ backbone ViT): lr giảm dần theo block — chuẩn khi fine-tune mô hình MAE/CLIP
 
 # Multimodal MoE (model.name: moe, chọn hướng bằng configs/moe/{A,B,C,D}.yaml)
 moe:
@@ -60,6 +61,19 @@ mgsp:
   meta_hidden: 256       # lớp ẩn của MLP sinh query metadata
   ffn_mult: 2            # FFN sau attention: D -> D*ffn_mult -> D
   attn_dropout: 0.1
+
+# HMF — hybrid metadata fusion (model.name: hmf, configs/moe/HMF.yaml, src/milk10k/models/hmf.py, bài Q1).
+# Các tham số MoE (d_model, lt_taus, modality_dropout, ...) lấy từ khối `moe`; ở đây chỉ phần mới.
+hmf:
+  k_meta: 2              # query sinh từ metadata cho attention pooling trên patch (như MGSP)
+  k_static: 2            # query học được, giống nhau cho mọi mẫu
+  attn_heads: 8          # head cross-attention (num_features backbone phải chia hết)
+  attn_dropout: 0.1
+  ffn_mult: 2
+  meta_hidden: 256
+  early_hidden: 512      # MLP của nhánh nối sớm [f_clin ‖ f_derm ‖ meta]
+  early_dropout: 0.4
+  branch_weight: 0.25    # loss = CE(đầu ra) + w·[CE(nhánh sớm) + loss long-tail(nhánh token)] + head phụ
 
 # Xử lý mất cân bằng — xem src/milk10k/losses.py và configs/imbalance/
 loss:

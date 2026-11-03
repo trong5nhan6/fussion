@@ -51,6 +51,13 @@ def create_encoder(backbone: str, pretrained: bool, img_size: int, grad_checkpoi
                    drop_path_rate: float = 0.0, trainable_blocks: int | None = None) -> nn.Module:
     """Tạo backbone timm không có head (num_classes=0 -> trả về vector đặc trưng)."""
     kw = {"drop_path_rate": drop_path_rate} if drop_path_rate else {}  # stochastic depth (regularization)
+    from .derm_backbones import DERM_BACKBONES, create_derm_backbone
+    if backbone in DERM_BACKBONES:                       # PanDerm / DermLIP: ViT-B/16 timm + trọng số da liễu
+        enc = create_derm_backbone(backbone, img_size, pretrained, **kw)
+        if grad_checkpointing:
+            enc.set_grad_checkpointing(True)
+        freeze_except_last_blocks(enc, trainable_blocks)
+        return enc
     try:
         # ViT/Swin cần biết img_size để nội suy position embedding / window
         enc = timm.create_model(backbone, pretrained=pretrained, num_classes=0, img_size=img_size, **kw)
@@ -60,6 +67,30 @@ def create_encoder(backbone: str, pretrained: bool, img_size: int, grad_checkpoi
         enc.set_grad_checkpointing(True)
     freeze_except_last_blocks(enc, trainable_blocks)
     return enc
+
+
+def encoder_param_groups(enc: nn.Module, lr: float, layer_decay: float | None) -> list[dict]:
+    """Nhóm tham số backbone. layer_decay (vd 0.75, chỉ ViT có `blocks`): lr giảm dần về phía đầu mạng
+    (layer-wise lr decay, chuẩn khi fine-tune mô hình MAE/CLIP): block cuối lr*decay, block đầu lr*decay^L,
+    patch/pos embed lr*decay^(L+1), norm cuối lr. None / 1 / backbone không có `blocks`: 1 nhóm lr như cũ."""
+    blocks = getattr(enc, "blocks", None)
+    if not layer_decay or layer_decay >= 1.0 or not isinstance(blocks, (nn.Sequential, nn.ModuleList)):
+        return [{"params": list(enc.parameters()), "lr": lr}]
+    L = len(blocks)
+    layer_of = {}
+    for i, b in enumerate(blocks):
+        for p in b.parameters():
+            layer_of[id(p)] = i + 1
+    groups: dict[int, list] = {}
+    for n, p in enc.named_parameters():
+        if id(p) in layer_of:
+            lid = layer_of[id(p)]
+        elif n.startswith(("norm.", "fc_norm.", "head")):
+            lid = L + 1
+        else:                                            # patch_embed, cls_token, pos_embed, norm_pre, reg tokens
+            lid = 0
+        groups.setdefault(lid, []).append(p)
+    return [{"params": ps, "lr": lr * layer_decay ** (L + 1 - lid)} for lid, ps in sorted(groups.items())]
 
 
 class ImageBaseline(nn.Module):

@@ -1,0 +1,21 @@
+# Stage 9 — bài Q1: backbone pretrain da liễu (PanDerm, DermLIP) + HMF (hybrid metadata fusion) + prior cân bằng.
+# Mốc so sánh: M0 = swin_base_384__abl_M0 (stage 6, test 0.519) — KHÔNG train lại, hậu xử lý đọc từ Drive stage 6.
+# Mỗi variant đổi đúng 1 yếu tố; mọi run 5 fold; chung recipe M0: MoE-D · d_model 256 · r5_nobce · clin+derm+meta.
+# Tên run: <backbone>__abl_<variant>__f<fold>. Hậu xử lý + bảng: python scripts/posthoc_shift.py
+#
+#   D   (MoE-D gốc) trên vit_base (ImageNet, đối chứng) · panderm_base · dermlip_vit_b16   -> lợi ích pretrain da liễu
+#   HMF (MoE-D + nối sớm + token MGSP) trên panderm_base · dermlip_vit_b16 · swin_base_384 -> lợi ích fusion hybrid
+#   q1  (MoE-D, sampler q=1: prior đều khi train, cắm prior test lúc suy luận) trên swin_base_384
+# 3 backbone ViT-B/224 dùng chung layer decay 0.75 (fine-tune MAE/CLIP chuẩn) để so sánh công bằng với nhau.
+name: stage9_pretrain_hybrid
+backbones:
+  vit_base: {config: configs/baselines/vit_base.yaml, set: [model.layer_decay=0.75]}
+  panderm_base: {config: configs/baselines/panderm_base.yaml, set: [model.layer_decay=0.75]}
+  dermlip_vit_b16: {config: configs/baselines/dermlip_vit_b16.yaml, set: [model.layer_decay=0.75]}
+  swin_base_384: configs/baselines/swin_base_384.yaml
+set: [moe.d_model=256]
+
+variants:
+  D:   {arch: D, overlay: r5_nobce, folds: [0, 1, 2, 3, 4], backbones: [vit_base, panderm_base, dermlip_vit_b16]}
+  HMF: {arch: HMF, overlay: r5_nobce, folds: [0, 1, 2, 3, 4], backbones: [panderm_base, dermlip_vit_b16, swin_base_384]}
+  q1:  {arch: D, overlay: r5_nobce, set: [train.sampler_q=1.0], folds: [0, 1, 2, 3, 4], backbones: [swin_base_384]}

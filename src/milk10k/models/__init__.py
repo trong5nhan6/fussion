@@ -12,6 +12,7 @@ Tuỳ chọn (engine tự gọi nếu có):
   - last_explain: dict tensor [B] (gate, expert) -> ghi vào oof.csv
 """
 from .concat_mlp import ConcatMLP
+from .hmf import HybridMetaFusion
 from .image_baseline import ImageBaseline
 from .mgsp import MGSP
 from .moe import MultimodalMoE
@@ -26,12 +27,23 @@ def _build_image(cfg: dict, meta_dim: int):
                          trainable_blocks=m.get("trainable_blocks"))
 
 
+def _moe_kwargs(cfg: dict) -> dict:
+    m = cfg["model"]
+    return dict(pretrained=m.get("pretrained", True), img_size=cfg["data"]["img_size"],
+                grad_checkpointing=m.get("grad_checkpointing", False), head_dropout=m.get("dropout", 0.3),
+                drop_path_rate=m.get("drop_path_rate", 0.0), trainable_blocks=m.get("trainable_blocks"),
+                layer_decay=m.get("layer_decay"), **cfg.get("moe", {}))
+
+
 def _build_moe(cfg: dict, meta_dim: int):
-    m, e = cfg["model"], cfg.get("moe", {})
-    return MultimodalMoE(m["arch"], m["backbone"], m["views"], pretrained=m.get("pretrained", True),
-                         img_size=cfg["data"]["img_size"], grad_checkpointing=m.get("grad_checkpointing", False),
-                         head_dropout=m.get("dropout", 0.3), drop_path_rate=m.get("drop_path_rate", 0.0),
-                         trainable_blocks=m.get("trainable_blocks"), **e)
+    m = cfg["model"]
+    return MultimodalMoE(m["arch"], m["backbone"], m["views"], **_moe_kwargs(cfg))
+
+
+def _build_hmf(cfg: dict, meta_dim: int):
+    m = cfg["model"]
+    return HybridMetaFusion(m["backbone"], m["views"], meta_dim, arch=m.get("arch", "D"),
+                            **cfg.get("hmf", {}), **_moe_kwargs(cfg))
 
 
 def _build_concat_mlp(cfg: dict, meta_dim: int):
@@ -56,6 +68,7 @@ MODELS = {
     "moe": _build_moe,      # multimodal MoE, hướng A/B/C/D/E (configs/moe/)
     "concat_mlp": _build_concat_mlp,  # nối CLS các ảnh (+ metadata tuỳ chọn) -> MLP 2 lớp
     "mgsp": _build_mgsp,    # metadata-guided spatial pooling (bài TAIMMA, configs: khối mgsp)
+    "hmf": _build_hmf,      # hybrid metadata fusion = MoE-D + nhánh nối sớm + token MGSP (bài Q1, khối hmf)
 }
 
 
