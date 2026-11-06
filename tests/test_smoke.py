@@ -745,3 +745,47 @@ def test_stage9_grid_configs():
         model = build_model(cfg, meta_dim=34)
         want = "HybridMetaFusion" if j.extra["variant"] == "HMF" else "MultimodalMoE"
         assert type(model).__name__ == want, j.name
+
+
+@pytest.mark.parametrize("vit,cnn", [("vit_tiny_patch16_224", "convnext_atto"),
+                                     ("swin_tiny_patch4_window7_224", "efficientnet_b0")])
+def test_hybrid_moe_forward_loss_backward(vit, cnn):
+    """Hybrid CNN + ViT: 6 token, mọi nhánh nhận gradient, mọi tham số nằm trong đúng 1 nhóm optimizer."""
+    cfg = load_config([ROOT / "configs" / "default.yaml", ROOT / "configs" / "moe" / "HYB.yaml"],
+                      ["model.pretrained=false", f"model.backbone={vit}", f"hybrid.cnn_backbone={cnn}",
+                       "data.img_size=224", "moe.d_model=64"])
+    model = build_model(cfg, meta_dim=34).train()
+    assert type(model).__name__ == "HybridMoE"
+    model.set_class_prior(torch.full((NUM_CLASSES,), 1.0 / NUM_CLASSES))
+    batch = {"images": {v: torch.randn(3, 3, 224, 224) for v in ("clin", "derm")}, "meta": torch.randn(3, 34)}
+    out = model(batch)
+    assert out.shape == (3, NUM_CLASSES)
+    assert torch.allclose(out.softmax(-1).sum(-1), torch.ones(3), atol=1e-4)
+    assert model.tokens.modalities == ["clin", "derm", "demo", "monet", "clin_cnn", "derm_cnn"]
+    model.compute_loss(out, torch.tensor([0, 3, 9]), torch.nn.CrossEntropyLoss()).backward()
+    for mod in (model.cnn, model.cnn_proj, model.tokens.encoder):
+        assert any(p.grad is not None for p in mod.parameters())
+    assert {"gate_clin_cnn", "gate_derm_cnn", "gate_clin"} <= set(model.last_explain)
+    groups = model.param_groups(1e-4, 0.5)
+    ids = [id(p) for g in groups for p in g["params"]]
+    assert len(ids) == len(set(ids)) == len(list(model.parameters()))
+
+
+def test_stage10_grid_configs():
+    """Lưới stage 10: 2 ViT x 2 CNN = 4 run fold 0, recipe M0 (d 256, sampler q0.5, 384 px)."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import yaml
+    from run_grid import build_variant_jobs
+    from milk10k.utils import resolve_path
+    exp = yaml.safe_load(open(ROOT / "experiments" / "stage10_hybrid.yaml", encoding="utf-8"))
+    jobs = build_variant_jobs(exp, "configs/env/colab_a100.yaml")
+    assert {j.name for j in jobs} == {"swin_base_384__abl_HC__f0", "swin_base_384__abl_HE__f0",
+                                      "vit_base_384__abl_HC__f0", "vit_base_384__abl_HE__f0"}
+    for j in jobs:
+        cfg = load_config([resolve_path(c) for c in j.configs], [*j.sets, "model.pretrained=false"])
+        assert cfg["model"]["name"] == "hybrid_moe" and cfg["model"]["arch"] == "D"
+        assert cfg["moe"]["d_model"] == 256 and cfg["train"]["sampler_q"] == 0.5 and cfg["data"]["img_size"] == 384
+        assert cfg["train"]["batch_size"] * cfg["train"]["accum_steps"] == 64 and cfg["train"]["lr"] == 5.0e-5
+        assert cfg["train"]["backbone_lr_mult"] == 1.0 and cfg["model"]["drop_path_rate"] == 0.1
+        want = "convnext_base" if "HC" in j.name else "tf_efficientnetv2_m"
+        assert cfg["hybrid"]["cnn_backbone"].startswith(want)

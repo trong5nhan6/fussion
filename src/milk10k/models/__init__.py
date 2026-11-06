@@ -13,6 +13,7 @@ Tuỳ chọn (engine tự gọi nếu có):
 """
 from .concat_mlp import ConcatMLP
 from .hmf import HybridMetaFusion
+from .hybrid import HybridMoE
 from .image_baseline import ImageBaseline
 from .mgsp import MGSP
 from .moe import MultimodalMoE
@@ -46,6 +47,11 @@ def _build_hmf(cfg: dict, meta_dim: int):
                             **cfg.get("hmf", {}), **_moe_kwargs(cfg))
 
 
+def _build_hybrid(cfg: dict, meta_dim: int):
+    m = cfg["model"]
+    return HybridMoE(m.get("arch", "D"), m["backbone"], m["views"], **cfg.get("hybrid", {}), **_moe_kwargs(cfg))
+
+
 def _build_concat_mlp(cfg: dict, meta_dim: int):
     m = cfg["model"]
     return ConcatMLP(m["backbone"], m["views"], pretrained=m.get("pretrained", True), img_size=cfg["data"]["img_size"],
@@ -69,6 +75,7 @@ MODELS = {
     "concat_mlp": _build_concat_mlp,  # nối CLS các ảnh (+ metadata tuỳ chọn) -> MLP 2 lớp
     "mgsp": _build_mgsp,    # metadata-guided spatial pooling (bài TAIMMA, configs: khối mgsp)
     "hmf": _build_hmf,      # hybrid metadata fusion = MoE-D + nhánh nối sớm + token MGSP (bài Q1, khối hmf)
+    "hybrid_moe": _build_hybrid,  # MoE-D với 2 backbone/ảnh: ViT|Swin (model.backbone) + CNN (hybrid.cnn_backbone)
 }
 
 

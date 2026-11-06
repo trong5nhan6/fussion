@@ -225,7 +225,10 @@ class MultimodalMoE(nn.Module):
 
     # ------------------------------------------------------------------ forward / loss
     def forward(self, batch):
-        x = self.tokens(batch)
+        return self.decode_tokens(self.tokens(batch))
+
+    def decode_tokens(self, x):
+        """Token [B, M, d] (đã modality dropout + type emb) -> fusion -> head; lưu logits phụ / giải thích."""
         z = self.fusion(x)
         self._aux_logits = [h(x[:, m]) for m, h in enumerate(self.aux_heads)]
         self._record_explain()

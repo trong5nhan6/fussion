@@ -36,7 +36,7 @@ SHOW_KEYS = ["model.name", "model.arch", "model.views", "moe.use_metadata", "moe
              "moe.modality_dropout", "moe.d_model", "model.layer_decay", "data.img_size", "data.resize", "data.aug", "model.drop_path_rate", "train.batch_size", "train.accum_steps", "train.epochs", "train.patience", "train.lr",
              "train.backbone_lr_mult", "train.weight_decay", "train.folds", "model.grad_checkpointing",
              "model.dropout", "loss.name", "loss.class_weight", "train.sampler_q", "crt.enabled",
-             "predict.tta", "predict.postprocess"]
+             "predict.tta", "predict.postprocess", "hybrid.cnn_backbone"]
 
 
 @dataclass

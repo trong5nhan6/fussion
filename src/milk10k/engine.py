@@ -228,7 +228,7 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
     logger.info("FULL DATA — train trên toàn bộ dữ liệu, không có val" if fold is None else f"FOLD {fold}")
     for line in model_report(model, cfg, meta_dim, device):
         logger.info(line)
-    if cfg["model"]["name"] in ("moe", "hmf"):
+    if cfg["model"]["name"] in ("moe", "hmf", "hybrid_moe"):
         e = cfg.get("moe", {})
         arch = cfg["model"]["arch"]
         desc = {"A": "gate theo nguồn", "B": "transformer + sparse MoE", "C": "B + 3 head long-tail",
@@ -240,6 +240,8 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
                     + (f" | lt_taus={e.get('lt_taus')} (bỏ qua loss overlay)" if arch in LONGTAIL_ARCHS else ""))
         if cfg["model"]["name"] == "hmf":
             logger.info(f"HMF          : + nhánh nối sớm [f‖meta]->MLP + token MGSP q_<view> | {cfg.get('hmf', {})}")
+        if cfg["model"]["name"] == "hybrid_moe":
+            logger.info(f"Hybrid       : + backbone CNN cho mỗi ảnh -> token <view>_cnn | {cfg.get('hybrid', {})}")
     if cfg["model"].get("layer_decay"):
         logger.info(f"Layer decay  : {cfg['model']['layer_decay']} (lr giảm dần theo block của backbone)")
     logger.info(device_report(device))
@@ -252,7 +254,7 @@ def _log_setup(cfg, fold, model, meta_dim, tr_df, va_df, device, logger):
     logger.info("Phân bố lớp  : " + ", ".join(f"{c}={t}/{v}" for c, (t, v) in zip(CLASSES, counts.values))
                 + "  (train/val)")
     w = class_weights(tr_df.label.to_numpy(), lc.get("class_weight"), lc.get("cb_beta", 0.999))
-    if cfg["model"].get("name") in ("moe", "hmf") and cfg["model"].get("arch") in LONGTAIL_ARCHS:
+    if cfg["model"].get("name") in ("moe", "hmf", "hybrid_moe") and cfg["model"].get("arch") in LONGTAIL_ARCHS:
         logger.info(f"Loss         : 3 head long-tail, logit-adjusted τ={cfg.get('moe', {}).get('lt_taus')} "
                     f"(prior theo sampler_q={tc.get('sampler_q')}); head phụ: CE — cấu hình loss overlay không dùng")
     else:

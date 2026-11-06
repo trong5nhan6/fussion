@@ -1,0 +1,3 @@
+# Hybrid CNN + ViT trên MoE hướng D (src/milk10k/models/hybrid.py): mỗi ảnh -> token ViT + token CNN, 6 token vào gate.
+# Nhánh CNN: khối `hybrid` (default.yaml). Truyền SAU config backbone (ViT/Swin), như A–E.
+model: {name: hybrid_moe, arch: D}

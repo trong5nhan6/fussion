@@ -1,0 +1,18 @@
+# Stage 10 — Hybrid CNN + ViT trên MoE hướng D (recipe mạnh nhất M0: d_model 256 · r5_nobce · clin+derm+meta · 384 px).
+# Mỗi ảnh đi qua CẢ backbone ViT (khoá backbone bên dưới) và backbone CNN (variant) -> 2 token / ảnh, 6 token vào gate.
+#   2 ViT  : swin_base_384 (= backbone của M0) · vit_base_384
+#   2 CNN  : HC = ConvNeXt-B (IN-22k -> 1k, 384) · HE = EfficientNetV2-M (IN-21k -> 1k)
+# => 4 run, fold 0 (so trực tiếp với M0 fold 0: val 0.601). Tên run: <vit>__abl_<HC|HE>__f0.
+# Muốn 5 fold cho cấu hình thắng: --variants HC --backbones swin_base_384 --folds 0,1,2,3,4
+# Bảng: python scripts/ablation_tables.py --dirs outputs
+name: stage10_hybrid
+backbones:
+  swin_base_384: configs/baselines/swin_base_384.yaml
+  vit_base_384: configs/baselines/vit_base_384.yaml
+# Như M0 (stage 6/7). Hai backbone 384 px trong một mô hình -> batch 8 x accum 8 (hiệu dụng 64) + grad checkpointing.
+set: [moe.d_model=256, train.lr=5.0e-5, model.dropout=0.4,
+      train.batch_size=8, train.accum_steps=8, model.grad_checkpointing=true]
+
+variants:
+  HC: {arch: HYB, overlay: r5_nobce, set: [hybrid.cnn_backbone=convnext_base.fb_in22k_ft_in1k_384]}
+  HE: {arch: HYB, overlay: r5_nobce, set: [hybrid.cnn_backbone=tf_efficientnetv2_m.in21k_ft_in1k]}

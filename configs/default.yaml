@@ -122,3 +122,8 @@ predict:
   # Metric val được tính trên điểm SAU hậu xử lý -> khớp cách chấm leaderboard.
   postprocess: auto      # auto: sigmoid nếu loss=bce, ngược lại top1 | top1 | softmax | sigmoid
   after_train: true      # train xong tự sinh submission.csv cho tập test
+
+# Hybrid CNN + ViT trên MoE-D (model.name: hybrid_moe, configs/moe/HYB.yaml, src/milk10k/models/hybrid.py, stage 10).
+# model.backbone = nhánh ViT/Swin (lấy từ config backbone); khối này chọn nhánh CNN. Tham số MoE lấy từ khối `moe`.
+hybrid:
+  cnn_backbone: convnext_base.fb_in22k_ft_in1k_384   # hoặc tf_efficientnetv2_m.in21k_ft_in1k
