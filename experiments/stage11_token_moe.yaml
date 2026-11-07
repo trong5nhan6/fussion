@@ -1,0 +1,14 @@
+# Stage 11 — MoE dùng chung trên CHUỖI 4 token thay cho expert theo nguồn của M0 (MoE-D).
+# 4 token [clin, derm, demo, monet] (M x d) -> TK: top-k MoE (4 expert, top-2, load-balancing) | SM: Soft MoE (4 expert x 1 slot)
+# -> TB token -> 3 head long-tail. Mọi thứ khác như M0: Swin-B-384 · d_model 256 · r5_nobce · clin+derm+meta · head phụ ·
+# modality dropout. 2 run, fold 0 (so với M0 fold 0: val 0.601). Tên run: swin_base_384__abl_<TK|SM>__f0
+name: stage11_token_moe
+backbones:
+  swin_base_384: configs/baselines/swin_base_384.yaml
+# Như M0 (stage 6): batch 8 x accum 8 (hiệu dụng 64) + grad checkpointing -> vừa T4 16GB
+set: [moe.d_model=256, train.lr=5.0e-5, model.dropout=0.4,
+      train.batch_size=8, train.accum_steps=8, model.grad_checkpointing=true]
+
+variants:
+  TK: {arch: F, overlay: r5_nobce}
+  SM: {arch: G, overlay: r5_nobce}

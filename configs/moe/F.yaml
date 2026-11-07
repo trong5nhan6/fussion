@@ -1,0 +1,3 @@
+# Hướng F — chuỗi 4 token [M, d] -> top-k MoE (expert dùng chung, router theo token, moe.n_experts / moe.top_k,
+# load-balancing moe.balance_alpha) -> TB token -> 3 head long-tail (τ = moe.lt_taus). Khác D: expert không gắn với nguồn.
+model: {name: moe, arch: F}

@@ -24,7 +24,14 @@ from .image_baseline import check_views, create_encoder, encoder_param_groups
 DEMO_DIM = 20   # tuổi(2) + giới(3) + skin tone(7) + vị trí(8), xem data/metadata.py
 MONET_DIM = 14  # 7 khái niệm x 2 ảnh
 ARCHS = {"A": ("gated", False), "B": ("transformer", False), "C": ("transformer", True), "D": ("gated", True),
-         "E": ("concat", True)}  # hướng -> (cách trộn token, có 3 head long-tail)
+         "E": ("concat", True),
+         "F": ("topk", True),    # 4 token [M, d] -> top-k MoE (expert dùng chung, router theo token) -> TB token
+         "G": ("soft", True)}    # 4 token [M, d] -> Soft MoE (Puigcerver et al., 2024) -> TB token
+# hướng -> (cách trộn token, có 3 head long-tail)
+ARCH_DESC = {"A": "gate theo nguồn", "B": "transformer + sparse MoE", "C": "B + 3 head long-tail",
+             "D": "A + 3 head long-tail", "E": "nối 4 token + 3 head long-tail",
+             "F": "chuỗi token -> top-k MoE dùng chung + 3 head long-tail",
+             "G": "chuỗi token -> Soft MoE + 3 head long-tail"}
 LONGTAIL_ARCHS = [a for a, (_, lt) in ARCHS.items() if lt]
 
 
@@ -178,6 +185,56 @@ class TransformerMoEFusion(nn.Module):
         return self.norm(x[:, 0])
 
 
+class TokenTopKMoE(nn.Module):
+    """Hướng F: chuỗi token [B, M, d] -> x + MoE-FFN(LN(x)) (router chọn top-k trong E expert dùng chung cho TỪNG token,
+    load-balancing như Switch) -> TB theo token -> LN. Khác D: expert không gắn với nguồn, router tự phân công."""
+
+    def __init__(self, d, n_experts, top_k, dropout):
+        super().__init__()
+        self.ln = nn.LayerNorm(d)
+        self.moe = MoEFFN(d, n_experts, top_k, dropout)
+        self.drop = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(d)
+        self.aux_loss = None
+        self.last_top1 = None
+
+    def forward(self, x):                                 # x: [B, M, d]
+        x = x + self.drop(self.moe(self.ln(x)))
+        self.aux_loss, self.last_top1 = self.moe.aux_loss, self.moe.last_top1
+        return self.norm(x.mean(dim=1))
+
+
+class SoftMoE(nn.Module):
+    """Hướng G: Soft MoE (Puigcerver et al., ICLR 2024) trên chuỗi token [B, M, d].
+    E expert x S slot. logits = LN(x) · Φ  [B, M, E·S];
+      dispatch D = softmax theo TOKEN  -> slot_j = Σ_i D_ij x_i      (mỗi slot là trộn mềm của mọi token)
+      expert e xử lý các slot của nó;  combine C = softmax theo SLOT -> y_i = Σ_j C_ij expert(slot_j)
+    Không route cứng, không cần load-balancing loss. Khối có residual; sau đó TB theo token -> LN."""
+
+    def __init__(self, d, n_experts, slots_per_expert, dropout):
+        super().__init__()
+        self.E, self.S = int(n_experts), int(slots_per_expert)
+        self.ln = nn.LayerNorm(d)
+        self.phi = nn.Parameter(torch.randn(d, self.E * self.S) * d ** -0.5)
+        self.experts = nn.ModuleList([nn.Sequential(nn.Linear(d, 2 * d), nn.GELU(), nn.Dropout(dropout),
+                                                    nn.Linear(2 * d, d)) for _ in range(self.E)])
+        self.drop = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(d)
+        self.aux_loss = None
+        self.last_top1 = None
+
+    def forward(self, x):                                 # x: [B, M, d]
+        h = self.ln(x)
+        logits = (h @ self.phi.to(h.dtype)).float()       # [B, M, E·S]
+        dispatch = logits.softmax(dim=1)                  # theo token
+        combine = logits.softmax(dim=2)                   # theo slot
+        slots = torch.einsum("bms,bmd->bsd", dispatch.to(h.dtype), h)          # [B, E·S, d]
+        out = torch.cat([e(slots[:, i * self.S:(i + 1) * self.S]) for i, e in enumerate(self.experts)], dim=1)
+        y = torch.einsum("bms,bsd->bmd", combine.to(out.dtype), out)           # [B, M, d]
+        self.last_top1 = (combine.view(*combine.shape[:2], self.E, self.S).sum(-1).argmax(-1)).detach()  # expert chính
+        return self.norm((x + self.drop(y)).mean(dim=1))
+
+
 class LongTailHeads(nn.Module):
     """3 head cùng nhìn z, train bằng logit-adjusted loss với τ khác nhau; suy luận = trung bình xác suất."""
 
@@ -196,7 +253,7 @@ class MultimodalMoE(nn.Module):
 
     def __init__(self, arch, backbone, views, pretrained=True, img_size=224, grad_checkpointing=False,
                  d_model=None, n_experts=4, top_k=2, n_blocks=2, n_heads=4, balance_alpha=0.01, aux_weight=0.25,
-                 modality_dropout=0.15, lt_taus=(0.0, 0.5, 1.0), dropout=0.1, head_dropout=0.3,
+                 modality_dropout=0.15, lt_taus=(0.0, 0.5, 1.0), dropout=0.1, head_dropout=0.3, slots_per_expert=1,
                  fusion_lr_mult=1.0, drop_path_rate=0.0, trainable_blocks=None, use_metadata=True,
                  layer_decay=None, extra_modalities=(), num_classes=NUM_CLASSES):
         super().__init__()
@@ -214,7 +271,9 @@ class MultimodalMoE(nn.Module):
         self.fusion = {"gated": lambda: GatedFusion(M, d_model, dropout),
                        "concat": lambda: ConcatFusion(M, d_model, dropout),
                        "transformer": lambda: TransformerMoEFusion(d_model, n_blocks, n_heads, n_experts, top_k,
-                                                                   dropout)}[fusion]()
+                                                                   dropout),
+                       "topk": lambda: TokenTopKMoE(d_model, n_experts, top_k, dropout),
+                       "soft": lambda: SoftMoE(d_model, n_experts, slots_per_expert, dropout)}[fusion]()
         self.head = (LongTailHeads(d_model, lt_taus, head_dropout, num_classes) if self.longtail else
                      nn.Sequential(nn.Dropout(head_dropout), nn.Linear(d_model, num_classes)))
         self.aux_heads = nn.ModuleList([nn.Linear(d_model, num_classes) for _ in range(M)])
@@ -270,6 +329,9 @@ class MultimodalMoE(nn.Module):
         elif isinstance(self.fusion, GatedFusion):
             g = self.fusion.last_gate
             self.last_explain = {f"gate_{m}": g[:, i] for i, m in enumerate(mods)}
+        elif isinstance(self.fusion, (TokenTopKMoE, SoftMoE)):   # expert chính (top-1 / combine lớn nhất) của từng token
+            t = self.fusion.last_top1
+            self.last_explain = {f"expert_{m}": t[:, i] for i, m in enumerate(mods)}
         else:
             t = self.fusion.last_top1
             self.last_explain = {f"expert_{m}": t[:, i] for i, m in enumerate(["cls"] + mods)}

@@ -38,11 +38,12 @@ moe:
   d_model: null          # null: token ảnh = CLS của backbone, không chiếu (d = 768 ViT/DINOv2, 1024 Swin/ConvNeXt)
                          # số nguyên (vd 256): chiếu đặc trưng ảnh về d chiều như phiên bản cũ
   use_metadata: true     # false: bỏ 2 token metadata (demo, MONET), chỉ dùng token ảnh (ablation)
-  n_experts: 4           # B/C: số expert trong MoE-FFN
-  top_k: 2               # B/C: mỗi token qua top-k expert
+  n_experts: 4           # B/C/F/G: số expert dùng chung trong MoE
+  top_k: 2               # B/C/F: mỗi token qua top-k expert
+  slots_per_expert: 1    # G (Soft MoE): số slot mỗi expert (E x S slot, trộn mềm từ mọi token)
   n_blocks: 2            # B/C: số khối transformer
   n_heads: 4             # B/C: số head attention
-  balance_alpha: 0.01    # B/C: trọng số load-balancing loss
+  balance_alpha: 0.01    # B/C/F: trọng số load-balancing loss
   aux_weight: 0.25       # trọng số loss phụ của head từng nguồn
   modality_dropout: 0.15 # xác suất che mỗi nguồn khi train
   lt_taus: [0.0, 0.5, 1.0]  # C/D: τ của 3 head long-tail

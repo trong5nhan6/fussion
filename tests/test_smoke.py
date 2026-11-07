@@ -789,3 +789,42 @@ def test_stage10_grid_configs():
         assert cfg["train"]["backbone_lr_mult"] == 1.0 and cfg["model"]["drop_path_rate"] == 0.1
         want = "convnext_base" if "HC" in j.name else "tf_efficientnetv2_m"
         assert cfg["hybrid"]["cnn_backbone"].startswith(want)
+
+
+@pytest.mark.parametrize("arch", ["F", "G"])
+def test_token_moe_forward_loss_backward(arch):
+    """F (top-k MoE) / G (Soft MoE) trên chuỗi 4 token: forward/loss/backward, expert nhận gradient, có cột expert_*."""
+    cfg = load_config([ROOT / "configs" / "default.yaml", ROOT / "configs" / "moe" / f"{arch}.yaml"],
+                      ["model.pretrained=false", "model.backbone=vit_tiny_patch16_224", "data.img_size=224",
+                       "moe.d_model=64"])
+    model = build_model(cfg, meta_dim=34).train()
+    model.set_class_prior(torch.full((NUM_CLASSES,), 1.0 / NUM_CLASSES))
+    batch = {"images": {v: torch.randn(3, 3, 224, 224) for v in ("clin", "derm")}, "meta": torch.randn(3, 34)}
+    out = model(batch)
+    assert out.shape == (3, NUM_CLASSES)
+    assert torch.allclose(out.softmax(-1).sum(-1), torch.ones(3), atol=1e-4)
+    loss = model.compute_loss(out, torch.tensor([0, 3, 9]), torch.nn.CrossEntropyLoss())
+    loss.backward()
+    experts = model.fusion.moe.experts if arch == "F" else model.fusion.experts
+    assert all(any(p.grad is not None for p in e.parameters()) for e in experts) or arch == "F"
+    assert (model.fusion.aux_loss is not None) == (arch == "F")
+    assert set(model.last_explain) == {f"expert_{m}" for m in ("clin", "derm", "demo", "monet")}
+    if arch == "G":                                             # Soft MoE: mọi expert đều nhận gradient (không route cứng)
+        assert model.fusion.phi.grad is not None and model.fusion.phi.shape == (64, 4)
+
+
+def test_stage11_grid_configs():
+    """Lưới stage 11: 2 run fold 0 (TK, SM) trên Swin-B-384, recipe M0."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import yaml
+    from run_grid import build_variant_jobs
+    from milk10k.utils import resolve_path
+    exp = yaml.safe_load(open(ROOT / "experiments" / "stage11_token_moe.yaml", encoding="utf-8"))
+    jobs = build_variant_jobs(exp, "configs/env/kaggle_t4.yaml")
+    assert [j.name for j in jobs] == ["swin_base_384__abl_TK__f0", "swin_base_384__abl_SM__f0"]
+    for j in jobs:
+        cfg = load_config([resolve_path(c) for c in j.configs], [*j.sets, "model.pretrained=false"])
+        assert cfg["model"]["arch"] == ("F" if "TK" in j.name else "G")
+        assert cfg["moe"]["d_model"] == 256 and cfg["train"]["sampler_q"] == 0.5 and cfg["data"]["img_size"] == 384
+        assert cfg["train"]["batch_size"] * cfg["train"]["accum_steps"] == 64
+        assert type(build_model(cfg, meta_dim=34)).__name__ == "MultimodalMoE"
